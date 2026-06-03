@@ -434,12 +434,151 @@ Expected output for medium samples:
 
 ### Anti-Debug or Environment Checks
 
-- Look for imports such as debugger checks, timing APIs, process/window checks,
-  registry/environment checks, or suspicious sleeps.
-- Report these as audit findings. Do not provide stealth or evasion guidance for
-  live systems.
-- For crackme/CTF samples, identify the check and suggest static patch-audit
-  candidates only when local authorization is clear.
+Anti-debug checks are gate mechanisms that detect analysis tools. Map every
+check before patching — some checks protect other checks via integrity guards.
+
+**Cataloging all checks:**
+
+- Import-based: `IsDebuggerPresent`, `CheckRemoteDebuggerPresent`,
+  `NtQueryInformationProcess` (ProcessDebugPort=7, ProcessDebugFlags=0x1F,
+  ProcessDebugObjectHandle=30), `OutputDebugStringA`/`OutputDebugStringW`
+- Manual PEB access: `fs:[0x30]` (x86) or `gs:[0x60]` (x64) segment reads
+  — check offsets BeingDebugged(+0x2), NtGlobalFlag(+0x68/+0xBC),
+  HeapFlags(+0x18→+0x0C/ForceFlags+0x10)
+- Hardware breakpoint detection: `GetThreadContext`/`SetThreadContext` +
+  CONTEXT.Dr0-Dr3/Dr7 inspection, or SEH handler inspecting CONTEXT DR fields
+- Software breakpoint detection: `repne scasb` scanning for `0xCC` bytes in
+  `.text`, CRC32/checksum over code regions comparing to precomputed constant
+- Timing checks: `RDTSC` + `CPUID` pairs comparing delta to threshold,
+  `QueryPerformanceCounter`, `GetTickCount`, `timeGetTime`
+- Exception-based traps: `CloseHandle(INVALID_HANDLE_VALUE)` in `__try/__except`,
+  `INT 2D` followed by EIP inspection, `UnhandledExceptionFilter` hooking
+- Thread-based: `CreateThread` launching a background thread that periodically
+  checks debugger presence while the main thread appears clean
+- TLS callback: code in PE TLS directory executed before the entry point;
+  anti-debug checks here run before the debugger can pause at EntryPoint
+- Window enumeration: `FindWindow`/`EnumWindows` searching for debugger window
+  class names ("OllyDbg", "WinDbgFrameClass", "x64dbg", "Qt5QWindowIcon")
+- Parent process check: `CreateToolhelp32Snapshot` + `Process32First`/`Next`
+  checking parent process name against debugger/shell names
+- SeDebugPrivilege: `OpenProcessToken` + `PrivilegeCheck` for debug privilege
+- Self-tracing: the process invokes `DebugActiveProcess` on itself (fails if
+  already being debugged)
+
+**Bypass strategy (in order of preference):**
+1. Patch the decision branch after the check (NOP the conditional jump)
+2. Patch the comparison constant (make the threshold impossibly large)
+3. Hook the detection API to return non-debugged values
+4. Only use runtime bypass (ScyllaHide, TitanHide) when static patching
+   is impractical for the number of checks
+
+**Recording findings:**
+- For each check: record offset, type, detection method, bypass method, and
+  whether the check affects other checks (integrity guard relationship)
+- Update `### Analyzed Functions` and `### Verified Evidence` in
+  `.chatcli/task.md`
+- If a check is a decoy (visible exit vs. silent branch), note which path
+  is the real detection and which is noise
+
+### Anti-VM Checks
+
+VM detection is a specialization of environment checks. The binary probes
+hardware, registry, filesystem, or process artifacts to detect if it runs
+inside a virtual machine.
+
+**Detection categories:**
+
+- Registry keys: VMware (`SOFTWARE\VMware, Inc.\VMware Tools`), VirtualBox
+  (`SOFTWARE\Oracle\VirtualBox Guest Additions`, `SYSTEM\...\Services\VBox*`),
+  Hyper-V, QEMU, Parallels, Xen
+- Process names: `vmtoolsd.exe`, `VMwareTray.exe`, `VBoxService.exe`,
+  `VBoxTray.exe`, `vmms.exe`, `vmwp.exe`, `xenservice.exe`, `prl_tools.exe`
+- Filesystem artifacts: driver files (`VBoxMouse.sys`, `vmhgfs.sys`,
+  `vmmouse.sys`), directories (`C:\Program Files\VMware\`)
+- Hardware/CPUID: `cpuid` hypervisor bit (leaf 1, ECX bit 31), hypervisor
+  vendor string (leaf 0x40000000 → "VMwareVMware", "VBoxVBoxVBox", "KVMKVMKVM",
+  "Microsoft Hv", "XenVMMXenVMM"), SIDT/SGDT/SLDT/STR IDT/GDT base relocation
+- MAC address OUI: VMware `00:0C:29`/`00:50:56`/`00:05:69`, VirtualBox
+  `08:00:27`, Parallels `00:1C:42`
+- WMI queries: `Win32_ComputerSystem.Manufacturer` = "VMware, Inc.",
+  `Win32_BIOS.Version` containing "VBOX", etc.
+- VMware I/O port: backdoor port `0x5658` ("VX")
+
+**Analysis approach:**
+1. `binary_find` for VM-related strings (registry paths, process names, MAC
+   prefixes, WMI class names, "VMware", "VirtualBox", "VBOX", "QEMU")
+2. IDA xrefs from found strings to detection functions
+3. Classify each detection as static (runs once at startup) or runtime
+   (periodic or before critical operations)
+4. For each check, NOP the conditional branch after the detection
+5. If many checks are chained, identify the earliest exit point and patch
+   there first — this lets you bypass all downstream checks at once
+
+**Recording:** Document each VM detection location, type, and bypass in
+`### Verified Evidence`. Label the detection method and the patch offset.
+
+### Self-Modifying Code Analysis
+
+SMC decrypts or modifies its own instructions at runtime. Static analysis
+sees only encrypted bytes.
+
+**Detection:**
+- `VirtualProtect` with `PAGE_EXECUTE_READWRITE` targeting `.text` or code
+  pages, followed by memory writes and `FlushInstructionCache`
+- `.text` section with `IMAGE_SCN_MEM_WRITE` flag (unusual)
+- `VirtualAlloc(PAGE_EXECUTE_READWRITE)` → write → indirect call into region
+
+**Analysis:**
+1. Break on `VirtualProtect` calls targeting code regions
+2. Trace the write/decrypt loop after VirtualProtect returns
+3. For XOR-based SMC: extract key buffer, compute plaintext in scratch script
+4. For nested SMC (decrypted code contains more decryptors): repeat per layer
+5. Dump post-decrypt region and re-run `ida_analyze` on the dump
+6. If execution is not allowed: reconstruct decrypt algorithm from static
+   analysis of the decrypt stub; extract key material offsets; report the
+   algorithm and key source, stop before guessing runtime-derived keys
+
+### Stack String Recovery
+
+When static string scanning is sparse but IDA shows many `push imm`/`mov [esp+N], imm`
+instructions near function prologues, strings are built on the stack at runtime.
+
+**Identification:**
+- Repeated `push imm32` with ASCII-printable bytes in the immediate values
+- `mov BYTE PTR [esp+N], 0x??` / `mov BYTE PTR [rbp-N], 0x??` writing
+  character sequences
+- Reference to the stack pointer passed to a string API (strcmp, printf, etc.)
+
+**Extraction:**
+1. Identify the byte-construction sequence in IDA
+2. Extract immediate byte values in order → reconstruct the string
+3. For multi-string functions, group pushes/movs by the target buffer address
+   (different `esp`/`rbp` offsets = different strings)
+4. Use `encoded_string_extract` or FLOSS tight-string mode for automated
+   extraction
+5. If the characters are XOR'd with a key: extract the key, decode, verify
+
+### API Hash Resolution
+
+When imports are nearly empty but the binary uses `LoadLibrary`/`GetProcAddress`
+extensively, APIs are resolved by hashing function names.
+
+**Finding the hash function:**
+- Locate `GetProcAddress` call sites in IDA
+- Trace backwards to find: the PEB walk (`fs:[0x30]`/`gs:[0x60]` → LDR →
+  module list → export directory), the hash loop (processes DLL export names),
+  and the target hash constants compared in the loop
+- Common hash algorithms: ROR13 (rotate-right 13, shellcode), CRC32 (256-entry
+  table, polynomial `0xEDB88320`), FNV-1a (base `0x811C9DC5`, prime
+  `0x01000193`), djb2 (init `5381`, `hash*33+c`)
+
+**Resolution:**
+1. Reconstruct the hash function in `.chatcli/tmp/scratch.py`
+2. Precompute hashes for all exports of the target DLLs (kernel32, ntdll,
+   user32, etc.)
+3. Match the target hash constants found in the binary to actual API names
+4. Record the mapping `hash -> DLL!FunctionName` in `.chatcli/task.md`
+5. Use `ida_deobfuscate` with API-role labels to propagate resolved names
 
 ### Encoding, Compression, Hashing, or Encryption
 
