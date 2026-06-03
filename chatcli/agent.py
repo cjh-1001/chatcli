@@ -33,6 +33,9 @@ class Agent(AgentSessionMixin, CompressionMixin, AgentToolMixin, AgentOutputMixi
         self._total_time = 0.0
         self._tool_calls_total = 0
         self._session_name: str | None = None
+        self._chatcli_task_id = ""
+        self._chatcli_agent_role = "main"
+        self._chatcli_child_name = ""
         self._text_buffer = ""  # for paragraph-level output buffering
         self._stream_open_line = False
         self._last_autosave_error: str | None = None

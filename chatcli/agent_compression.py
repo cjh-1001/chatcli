@@ -181,6 +181,7 @@ class CompressionMixin:
             pass
         try:
             children_dir = Path(self.workspace) / ".chatcli" / "children"
+            active_task_id = str(getattr(self, "_chatcli_task_id", "") or "").strip()
             if children_dir.exists():
                 records = sorted(
                     children_dir.glob("*.md"),
@@ -190,9 +191,11 @@ class CompressionMixin:
                 child_parts = []
                 for path in records:
                     text = path.read_text(encoding="utf-8", errors="replace")
+                    if active_task_id and f"- Task ID: {active_task_id}" not in text:
+                        continue
                     lines = []
                     for line in text.splitlines():
-                        if line.startswith(("- Status:", "- Updated:", "- Task:", "- Summary:")):
+                        if line.startswith(("- Status:", "- Updated:", "- Task ID:", "- Task:", "- Summary:")):
                             lines.append(line)
                         if len(lines) >= 8:
                             break

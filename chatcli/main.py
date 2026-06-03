@@ -1,4 +1,4 @@
-"""chatcli — Give any chat LLM local CLI superpowers.
+"""chatcli - Give any chat LLM local CLI superpowers.
 
 Usage:
     chatcli              # Interactive REPL
@@ -8,7 +8,12 @@ Usage:
 """
 
 import sys
+import getpass
+import json
+import os
 from pathlib import Path
+
+import yaml
 
 from .config import Config
 from .ui import REPL
@@ -76,7 +81,7 @@ search_backend: auto        # auto | bing | duckduckgo
 ida_path: ""                 # optional path to idat64/idat/ida64/ida for ida_analyze
 auto_resume: false           # auto-restore last session + continue work on startup
 auto_compress: true          # auto-compress context when it gets too long
-compress_threshold: 80000    # tokens — trigger compression above this
+compress_threshold: 80000    # tokens - trigger compression above this
 max_retries: 3               # retry failed API calls with exponential backoff
 request_timeout: 120         # API request timeout in seconds
 max_tool_output_chars: 40000 # max chars per tool result fed into history
@@ -87,17 +92,88 @@ context_file: .chatcli/context.md
 """
 
 
-def setup_config():
+def _yaml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _detected_provider_settings() -> dict[str, str]:
+    provider = os_provider = ""
+    try:
+        provider = os.environ.get("CHATCLI_PROVIDER", "").strip()
+        model = os.environ.get("CHATCLI_MODEL", "").strip()
+        api_base = os.environ.get("CHATCLI_API_BASE", "").strip()
+
+        if not provider:
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                provider = "anthropic"
+            elif os.environ.get("MIMO_API_KEY"):
+                provider = "openai-compatible"
+                api_base = api_base or "https://api.xiaomimimo.com/v1"
+            elif os.environ.get("OPENAI_API_KEY"):
+                provider = "openai"
+            else:
+                provider = "anthropic"
+
+        os_provider = provider
+    except Exception:
+        provider = "anthropic"
+        model = ""
+        api_base = ""
+
+    if not model:
+        model = "claude-sonnet-4-6" if provider == "anthropic" else "gpt-4.1"
+
+    return {
+        "provider": os_provider or provider,
+        "model": model,
+        "api_base": api_base,
+        "api_key": "",
+    }
+
+
+def _render_config(settings: dict[str, str] | None = None) -> str:
+    settings = settings or {}
+    provider = settings.get("provider", "anthropic")
+    model = settings.get("model", "claude-sonnet-4-6")
+    api_key = settings.get("api_key", "")
+    api_base = settings.get("api_base", "")
+
+    lines: list[str] = []
+    for line in DEFAULT_CONFIG.splitlines():
+        if line.startswith("  provider:"):
+            lines.append(
+                f"  provider: {_yaml_string(provider)}        "
+                "# anthropic | openai | openai-compatible | text-tools"
+            )
+        elif line.startswith("  model:"):
+            lines.append(f"  model: {_yaml_string(model)}")
+            if api_key:
+                lines.append("  api_key: " + _yaml_string(api_key))
+        elif line.startswith("  # api_key:") and api_key:
+            continue
+        elif line.startswith("  # api_base:") and api_base:
+            lines.append("  api_base: " + _yaml_string(api_base))
+        else:
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def setup_config(
+    config_file: Path | None = None,
+    settings: dict[str, str] | None = None,
+    quiet: bool = False,
+) -> Path:
     """Create default config file."""
-    config_dir = Path.cwd() / ".chatcli"
-    config_file = config_dir / "config.yaml"
+    config_file = config_file or Config.default_config_file()
+    config_dir = config_file.parent
 
     if config_file.exists():
-        print(f"Config already exists at {config_file}")
-        return
+        if not quiet:
+            print(f"Config already exists at {config_file}")
+        return config_file
 
-    config_dir.mkdir(exist_ok=True)
-    config_file.write_text(DEFAULT_CONFIG, encoding="utf-8")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(_render_config(settings), encoding="utf-8")
 
     # Also create a sample context file
     context_file = config_dir / "context.md"
@@ -111,6 +187,9 @@ def setup_config():
             encoding="utf-8",
         )
 
+    if quiet:
+        return config_file
+
     print(f"Created config at {config_file}")
     print(f"Created context at {context_file}")
     print("\nNext: set your API key via environment variable:")
@@ -121,6 +200,153 @@ def setup_config():
     print("  export MIMO_API_KEY=...")
     print("  or")
     print("  export CHATCLI_API_KEY=...")
+    return config_file
+
+
+def _prompt_default(prompt: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{prompt}{suffix}: ").strip()
+    return value or default
+
+
+def _choose_provider(default: str) -> tuple[str, str, str]:
+    choices = [
+        ("anthropic", "Anthropic", "claude-sonnet-4-6", ""),
+        ("openai", "OpenAI", "gpt-4.1", ""),
+        ("openai-compatible", "OpenAI-compatible", "gpt-4.1", ""),
+        ("text-tools", "Text-tools", "gpt-4.1", ""),
+        ("openai-compatible", "MiMo / xiaomimimo.com", "claude-sonnet-4-6", "https://api.xiaomimimo.com/v1"),
+    ]
+    print("\n选择模型服务商：")
+    default_index = 1
+    for idx, (provider, label, _, api_base) in enumerate(choices, 1):
+        if provider == default and not api_base:
+            default_index = idx
+            break
+    for idx, (_, label, _, _) in enumerate(choices, 1):
+        marker = " (默认)" if idx == default_index else ""
+        print(f"  {idx}. {label}{marker}")
+
+    raw = _prompt_default("输入序号", str(default_index))
+    try:
+        index = int(raw)
+    except ValueError:
+        index = default_index
+    if index < 1 or index > len(choices):
+        index = default_index
+    provider, _, model, api_base = choices[index - 1]
+    return provider, model, api_base
+
+
+def _env_api_key(provider: str, api_base: str) -> tuple[str, str]:
+    import os
+
+    if os.environ.get("CHATCLI_API_KEY"):
+        return "CHATCLI_API_KEY", os.environ["CHATCLI_API_KEY"]
+    if "xiaomimimo.com" in api_base.lower():
+        value = os.environ.get("MIMO_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        return ("MIMO_API_KEY" if os.environ.get("MIMO_API_KEY") else "OPENAI_API_KEY"), value
+    if provider == "anthropic":
+        return "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY", "")
+    return "OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY", "")
+
+
+def _read_config_data(config_file: Path) -> dict:
+    if not config_file.exists():
+        return {}
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_provider_settings(config_file: Path, settings: dict[str, str], preserve_template: bool) -> None:
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    if preserve_template:
+        config_file.write_text(_render_config(settings), encoding="utf-8")
+        return
+
+    data = _read_config_data(config_file)
+    provider_data = data.setdefault("provider", {})
+    provider_data["provider"] = settings["provider"]
+    provider_data["model"] = settings["model"]
+    if settings.get("api_base"):
+        provider_data["api_base"] = settings["api_base"]
+    else:
+        provider_data.pop("api_base", None)
+    if settings.get("api_key"):
+        provider_data["api_key"] = settings["api_key"]
+    config_file.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def guide_config(config_file: Path, preserve_template: bool = False) -> None:
+    data = _read_config_data(config_file)
+    provider_data = data.get("provider", {}) if isinstance(data.get("provider"), dict) else {}
+    detected = _detected_provider_settings()
+
+    current_provider = provider_data.get("provider") or detected["provider"]
+    provider, default_model, default_api_base = _choose_provider(current_provider)
+
+    current_model = provider_data.get("model") or detected.get("model") or default_model
+    if current_provider != provider:
+        current_model = default_model
+    model = _prompt_default("模型名", current_model)
+
+    current_api_base = provider_data.get("api_base") or detected.get("api_base") or default_api_base
+    if provider in {"openai-compatible", "text-tools"}:
+        api_base = _prompt_default("API base URL", current_api_base)
+    else:
+        api_base = _prompt_default("API base URL（默认通常留空）", current_api_base)
+
+    env_name, env_key = _env_api_key(provider, api_base)
+    api_key = ""
+    if env_key:
+        print(f"检测到 {env_name}，不会把 key 写入配置文件。")
+    else:
+        print("未检测到 API key。可以留空，之后用环境变量配置；也可以写入本地配置文件。")
+        api_key = getpass.getpass("API key（留空跳过）: ").strip()
+
+    _write_provider_settings(
+        config_file,
+        {
+            "provider": provider,
+            "model": model,
+            "api_base": api_base,
+            "api_key": api_key,
+        },
+        preserve_template=preserve_template,
+    )
+    print(f"配置已更新：{config_file}")
+
+
+def _first_run_config_file() -> Path | None:
+    if os.environ.get("CHATCLI_CONFIG"):
+        config_file = Config.default_config_file()
+        return None if config_file.exists() else config_file
+    if Config.find_workspace_config_file() is None:
+        return Config.default_config_file()
+    if Config.find_config_file() is None:
+        return Config.default_config_file()
+    return None
+
+
+def ensure_first_run_config(interactive: bool) -> Config:
+    config_file = _first_run_config_file()
+    if config_file is not None:
+        settings = _detected_provider_settings()
+        setup_config(config_file, settings=settings, quiet=not interactive)
+        if interactive:
+            print("未发现当前环境配置文件，已自动创建默认配置。")
+            guide_config(config_file, preserve_template=True)
+
+    config = Config.load()
+    if not config.provider.api_key and interactive:
+        config_file = Config.find_config_file() or Config.default_config_file()
+        print("\n当前配置还没有可用 API key，进入配置向导。")
+        guide_config(config_file, preserve_template=False)
+        config = Config.load()
+    return config
 
 
 def main():
@@ -134,7 +360,11 @@ def main():
     while i < len(args):
         arg = args[i]
         if arg in ("--setup", "-s"):
-            setup_config()
+            config_file = Config.default_config_file()
+            preserve_template = not config_file.exists()
+            config_file = setup_config(config_file)
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                guide_config(config_file, preserve_template=preserve_template)
             return
         if arg in ("--version", "-v"):
             from . import __version__
@@ -156,8 +386,9 @@ def main():
             positional.append(arg)
         i += 1
 
-    # Load config
-    config = Config.load()
+    # Load config, creating a first-run project config when none exists.
+    interactive_setup = sys.stdin.isatty() and sys.stdout.isatty()
+    config = ensure_first_run_config(interactive_setup)
 
     # Check for API key
     if not config.provider.api_key:
@@ -165,7 +396,7 @@ def main():
             "Error: No API key found. Set CHATCLI_API_KEY, ANTHROPIC_API_KEY, "
             "OPENAI_API_KEY, or MIMO_API_KEY."
         )
-        print("Or run 'chatcli --setup' to create a config file first.")
+        print("Or run 'chatcli --setup' to configure provider settings interactively.")
         sys.exit(1)
 
     # Single-shot mode (skip if a mode flag was set)

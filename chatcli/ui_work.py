@@ -68,6 +68,10 @@ DELEGATION_PREFIXES = (
 
 
 class WorkCommandMixin:
+    def _set_agent_task_scope(self, task_id: str = "") -> None:
+        self.agent._chatcli_task_id = str(task_id or "").strip()
+        self.agent._chatcli_agent_role = "main"
+        self.agent._chatcli_child_name = ""
     def _handle_smart_input(self, ui: str):
         if self._awaiting_work_choice:
             was_scope_confirmation = self._awaiting_scope_confirmation
@@ -106,6 +110,7 @@ class WorkCommandMixin:
         if self._should_start_smart_work(ui):
             self._start_smart_work(ui)
             return
+        self._set_agent_task_scope("")
         self.agent.run(ui)
         self._process_auto_requests()
     def _should_start_security_audit(self, ui: str) -> bool:
@@ -114,7 +119,8 @@ class WorkCommandMixin:
             return False
         return any(re.search(p, lowered, re.IGNORECASE) for p in SECURITY_AUDIT_PATTERNS)
     def _start_security_audit(self, ui: str):
-        start_task(self.config.workspace, f"Security audit: {ui}")
+        task_id = start_task(self.config.workspace, f"Security audit: {ui}")
+        self._set_agent_task_scope(task_id)
         self.console.print(Panel(
             "[bold magenta]SECURITY AUDIT / LAB ANALYSIS[/]\n"
             f"[dim]Scope: {ui}[/]\n"
@@ -131,7 +137,8 @@ class WorkCommandMixin:
                 return False
         return any(re.search(p, lowered, re.IGNORECASE) for p in MALWARE_TRIAGE_PATTERNS)
     def _start_malware_triage(self, ui: str):
-        start_task(self.config.workspace, f"Malware triage: {ui}")
+        task_id = start_task(self.config.workspace, f"Malware triage: {ui}")
+        self._set_agent_task_scope(task_id)
         self.console.print(Panel(
             "[bold magenta]MALWARE TRIAGE[/]\n"
             f"[dim]Scope: {ui}[/]\n"
@@ -200,7 +207,8 @@ class WorkCommandMixin:
             return False
         return True
     def _start_smart_work(self, ui: str):
-        start_task(self.config.workspace, ui)
+        task_id = start_task(self.config.workspace, ui)
+        self._set_agent_task_scope(task_id)
         self.console.print(Panel(
             f"{SMART_WORK_PANEL}\n"
             f"[dim]Task: {ui}[/]\n"
@@ -217,9 +225,13 @@ class WorkCommandMixin:
             return self._show_active_status()
         if a=="continue":
             return self._continue_active_work("continue")
-        if a=="done": mark_task_done(self.config.workspace); return True
+        if a=="done":
+            mark_task_done(self.config.workspace)
+            self._set_agent_task_scope("")
+            return True
         if a:
-            start_task(self.config.workspace, a)
+            task_id = start_task(self.config.workspace, a)
+            self._set_agent_task_scope(task_id)
             self.console.print(Panel(
                 f"[bold green]WORK MODE[/]\n"
                 f"[dim]Task: {a}[/]\n"
@@ -300,11 +312,15 @@ class WorkCommandMixin:
         max_cycles = max_cycles or self._max_work_cycles()
         prompt = first_prompt
         pending_compression_events: list[dict] = []
+        task_id = self._current_task_id()
+        self._set_agent_task_scope(task_id)
         for cycle in range(1, max_cycles + 1):
             self._print_work_cycle_header(cycle, max_cycles)
             effective_prompt = prompt
             compression_context = self._compression_context(pending_compression_events)
-            child_context = self._child_context_summary()
+            task_id = self._current_task_id()
+            self._set_agent_task_scope(task_id)
+            child_context = self._child_context_summary(task_id=task_id)
             cycle_guidance = self._work_cycle_guidance(cycle)
             context_parts = [
                 part for part in (cycle_guidance, compression_context, child_context) if part
@@ -313,7 +329,7 @@ class WorkCommandMixin:
                 effective_prompt = effective_prompt.rstrip() + "\n\n" + "\n\n".join(context_parts)
             result = self.agent.run(effective_prompt)
             pending_compression_events = self.agent.pop_compression_events()
-            self._process_auto_requests()
+            self._process_auto_requests(expected_task_id=task_id)
             if self._needs_plan_confirmation(result):
                 if allow_pauses:
                     self._awaiting_work_choice = True
@@ -332,6 +348,7 @@ class WorkCommandMixin:
                 )
                 continue
             if self._is_work_complete(result):
+                self._set_agent_task_scope("")
                 self.console.print(
                     f"[green]done[/] [dim]{self._format_work_progress()}[/]"
                 )

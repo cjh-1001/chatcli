@@ -8,6 +8,7 @@ import re
 import shlex
 import threading
 
+from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -16,9 +17,13 @@ from .agent import Agent
 from .auto_requests import AutoRequestMixin
 from .child_records import ChildRecordMixin
 from .child_state import ChildWindow
+from .worklog import get_task_status
 
 
 class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
+    def _current_task_id(self) -> str:
+        status = get_task_status(self.config.workspace) or {}
+        return str(status.get("task_id") or "").strip()
     def _unique_child_name(self, base: str) -> str:
         root = self._safe_child_name(base)
         with self._children_lock:
@@ -32,7 +37,7 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
     def _safe_child_name(self, name: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", (name or "").strip()).strip("-_")
         return cleaned[:40] or "child"
-    def _make_child(self, name: str) -> ChildWindow:
+    def _make_child(self, name: str, task_id: str | None = None) -> ChildWindow:
         child_name = self._safe_child_name(name)
         with self._children_lock:
             if child_name in self.children:
@@ -43,12 +48,17 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             agent.auto_approve = self.agent.auto_approve
             agent.debug = self.agent.debug
             agent._session_name = f"child-{child_name}"
+            scoped_task_id = (task_id if task_id is not None else self._current_task_id()).strip()
+            agent._chatcli_task_id = scoped_task_id
+            agent._chatcli_agent_role = "child"
+            agent._chatcli_child_name = child_name
             agent._auto_save = lambda: None
             agent._log_work_action = lambda *args, **kwargs: None
             child = ChildWindow(
                 name=child_name,
                 agent=agent,
                 buffer=buffer,
+                task_id=scoped_task_id,
                 notes_path=str(self._child_notes_path(child_name)),
             )
             self.children[child_name] = child
@@ -72,6 +82,8 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
         with self._children_lock:
             if child.status == "running":
                 raise ValueError(f"child is already running: {child.name}")
+            child.task_id = child.task_id or self._current_task_id()
+            child.agent._chatcli_task_id = child.task_id
             child.status = "running"
             child.task = task
             child.result = ""
@@ -89,7 +101,6 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
                     f"\n[green]child done[/] [cyan]{child.name}[/] "
                     f"[dim]{escape(child.summary)} | /child show {child.name}[/]"
                 )
-                self._process_auto_requests()
             except Exception as e:
                 self._mark_child_finished(
                     child,
@@ -142,6 +153,8 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
         self.console.print(
             f"[cyan]{child.name}[/] [dim]{child.status} | updated {child.updated_at or child.created_at}[/]"
         )
+        if child.task_id:
+            self.console.print(f"[dim]task id: {child.task_id}[/]")
         if child.task:
             self.console.print(f"[dim]task: {child.task}[/]")
         if child.summary:
@@ -193,9 +206,12 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
         self.agent.run(prompt)
         self._process_auto_requests()
         return True
-    def _child_context_summary(self, limit: int = 8) -> str:
+    def _child_context_summary(self, limit: int = 8, task_id: str | None = None) -> str:
         with self._children_lock:
             children = list(self.children.values())
+        active_task_id = (task_id if task_id is not None else self._current_task_id()).strip()
+        if active_task_id:
+            children = [child for child in children if child.task_id == active_task_id]
         if not children:
             return ""
         children = sorted(
@@ -209,7 +225,8 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             task = self._shorten_child_text(child.task or "", 140)
             lines.append(
                 f"- {child.name}: status={child.status}; summary={summary}; "
-                f"record={child.notes_path or '(none)'}; task={task}"
+                f"record={child.notes_path or '(none)'}; task_id={child.task_id or '(none)'}; "
+                f"task={task}"
             )
         lines.append(
             "Use completed child summaries to choose the next main-window step. "

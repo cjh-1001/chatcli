@@ -1,6 +1,8 @@
 """Project context loader — reads context file (like CLAUDE.md)."""
 
 import platform
+import shutil
+import sys
 from pathlib import Path
 from datetime import datetime
 
@@ -172,7 +174,6 @@ Create memory files with write_file. The /memory command lists saved memories.
                 prompt += f"\n## Project Context (from {ctx_path.name})\n{extra}\n"
                 context_loaded = True
             except Exception as e:
-                import sys
                 print(f"[chatcli] Warning: failed to read: {e}", file=sys.stderr)
     
     # Walk up directories loading CLAUDE.md and .chatcli/context.md
@@ -250,6 +251,9 @@ def get_workspace_info(workspace: str) -> str:
         print(f"[chatcli] Warning: listing failed: {e}", file=sys.stderr)
 
     # Git info
+    if shutil.which("git") is None:
+        return "\n".join(lines)
+
     import subprocess
     try:
         branch = subprocess.run(

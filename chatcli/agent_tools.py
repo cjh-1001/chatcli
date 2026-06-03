@@ -40,6 +40,10 @@ class AgentToolMixin(AgentToolDisplayMixin):
                 f"    [dim]{message}[/]"
             )
         params.setdefault("workspace", self.workspace)
+        if name == "chatcli_auto_request":
+            params.setdefault("_chatcli_task_id", getattr(self, "_chatcli_task_id", ""))
+            params.setdefault("_chatcli_agent_role", getattr(self, "_chatcli_agent_role", "main"))
+            params.setdefault("_chatcli_child_name", getattr(self, "_chatcli_child_name", ""))
 
         # Render the tool call
         self._close_stream_line()

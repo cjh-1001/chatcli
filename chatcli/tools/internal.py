@@ -61,6 +61,9 @@ class ChatcliAutoRequestTool(Tool):
         note: str = "",
         apply: bool = False,
         workspace: str = ".",
+        _chatcli_task_id: str = "",
+        _chatcli_agent_role: str = "",
+        _chatcli_child_name: str = "",
         **kwargs,
     ) -> ToolResult:
         path = Path(workspace) / ".chatcli" / "auto_requests.jsonl"
@@ -74,6 +77,9 @@ class ChatcliAutoRequestTool(Tool):
             "note": note,
             "apply": bool(apply),
             "reason": reason,
+            "task_id": _chatcli_task_id,
+            "source_role": _chatcli_agent_role,
+            "source_child": _chatcli_child_name,
         }
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")

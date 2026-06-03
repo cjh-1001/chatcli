@@ -24,7 +24,15 @@ chatcli 需要 Python 3.10 或更高版本。
 
 ### 2. 初始化配置
 
-在你要使用 chatcli 的项目目录里运行：
+在你要使用 chatcli 的项目目录里直接运行：
+
+```powershell
+chatcli
+```
+
+如果当前目录或父目录没有 `.chatcli/config.yaml` / `.chatcli/config.yml`，chatcli 会自动创建配置文件并进入交互式配置向导。
+
+也可以手动初始化或重新进入配置向导：
 
 ```powershell
 chatcli --setup
@@ -37,7 +45,7 @@ chatcli --setup
 .chatcli/context.md
 ```
 
-`.chatcli/config.yaml` 是本项目的配置文件，`.chatcli/context.md` 可以写项目背景、技术栈、约定和长期提示词。
+`.chatcli/config.yaml` 是本项目的配置文件，`.chatcli/context.md` 可以写项目背景、技术栈、约定和长期提示词。设置了 `CHATCLI_CONFIG` 时，chatcli 会优先使用并在缺失时创建该路径指向的配置文件。
 
 ### 3. 配置 API Key
 
@@ -277,4 +285,3 @@ chatcli.main:main
 - `chatcli/tools/`: 本地工具实现
 - `chatcli/ui.py`: 交互式界面
 - `chatcli/agent.py`: 模型调用和工具循环
-

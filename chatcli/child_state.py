@@ -22,4 +22,5 @@ class ChildWindow:
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     updated_at: str = ""
     thread: threading.Thread | None = None
+    task_id: str = ""
 

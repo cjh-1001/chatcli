@@ -125,7 +125,8 @@ class ReverseCommandMixin:
         target = str(target_path)
 
         task_kind = "Binary patch audit" if patch_requested else "Reverse analysis"
-        start_task(self.config.workspace, f"{task_kind}: {target}")
+        task_id = start_task(self.config.workspace, f"{task_kind}: {target}")
+        self._set_agent_task_scope(task_id)
         mode = "IDA static analysis" if use_ida else "static binary triage"
         if crackme:
             mode += " + CTF/crackme focus"

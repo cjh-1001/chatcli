@@ -12,6 +12,7 @@ each turn, so interrupting with Ctrl+C preserves all state.
 
 from pathlib import Path
 from datetime import datetime
+import uuid
 from typing import Optional
 
 
@@ -36,13 +37,15 @@ def _read_text_compat(path: Path) -> str:
 # ── Task state ────────────────────────────────────────────────────
 
 
-def start_task(workspace: str, description: str) -> None:
+def start_task(workspace: str, description: str) -> str:
     """Create a new task file and initialize the work log."""
     tf = _task_file(workspace)
     tf.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    task_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
     tf.write_text(
         f"# Task: {description}\n\n"
+        f"**Task ID:** {task_id}\n"
         f"**Status:** in_progress\n"
         f"**Started:** {now}\n"
         f"**Last activity:** {now}\n\n"
@@ -61,6 +64,7 @@ def start_task(workspace: str, description: str) -> None:
         f"**Started:** {now}\n\n",
         encoding="utf-8",
     )
+    return task_id
 
 
 def get_task_status(workspace: str) -> Optional[dict]:
@@ -71,10 +75,13 @@ def get_task_status(workspace: str) -> Optional[dict]:
 
     content = _read_text_compat(tf)
     status = "unknown"
+    task_id = ""
     for line in content.split("\n"):
+        if "**Task ID:**" in line:
+            task_id = line.split("**Task ID:**")[-1].strip()
+            continue
         if "**Status:**" in line:
             status = line.split("**Status:**")[-1].strip()
-            break
 
     # Count completed vs total subtasks
     subtasks = []
@@ -91,6 +98,7 @@ def get_task_status(workspace: str) -> Optional[dict]:
     total = len(subtasks)
 
     return {
+        "task_id": task_id,
         "status": status,
         "subtasks": subtasks,
         "done": done_count,

@@ -65,11 +65,13 @@ class AutoRequestMixin:
             table = Table(title="Auto requests", box=box.SIMPLE, show_lines=False)
             table.add_column("Type", style="cyan", no_wrap=True)
             table.add_column("Name", no_wrap=True)
+            table.add_column("Task ID", no_wrap=True)
             table.add_column("Reason")
             for event in events:
                 table.add_row(
                     str(event.get("request_type", "")),
                     str(event.get("name") or event.get("skill_name") or ""),
+                    str(event.get("task_id") or ""),
                     str(event.get("reason", "")),
                 )
             self.console.print(table)
@@ -99,11 +101,22 @@ class AutoRequestMixin:
                 f"- Note: {note or '(no note)'}\n"
                 f"- Reason: {reason or '(no reason)'}\n"
             )
-    def _process_auto_requests(self):
+    def _active_auto_request_task_id(self) -> str:
+        current = getattr(self, "_current_task_id", None)
+        if callable(current):
+            return str(current() or "").strip()
+        return ""
+    def _process_auto_requests(self, expected_task_id: str | None = None):
         if self._auto_requests_processing:
             return
         path = self._auto_requests_path()
         batch_paths = self._auto_request_batch_paths()
+        active_task_id = (
+            expected_task_id if expected_task_id is not None
+            else self._active_auto_request_task_id()
+        )
+        active_task_id = str(active_task_id or "").strip()
+        deferred_lines: list[str] = []
         try:
             self._auto_requests_processing = True
             if path.exists():
@@ -134,6 +147,13 @@ class AutoRequestMixin:
                     event = json.loads(raw)
                 except Exception:
                     continue
+                event_task_id = str(event.get("task_id") or "").strip()
+                if event_task_id and active_task_id and event_task_id != active_task_id:
+                    deferred_lines.append(raw)
+                    continue
+                if event_task_id and not active_task_id:
+                    deferred_lines.append(raw)
+                    continue
                 req_type = event.get("request_type", "")
                 reason = event.get("reason", "")
                 if req_type == "child_task":
@@ -141,7 +161,7 @@ class AutoRequestMixin:
                     if not task:
                         continue
                     name = self._unique_child_name(event.get("name") or "auto-child")
-                    child = self._make_child(name)
+                    child = self._make_child(name, task_id=event_task_id or active_task_id)
                     child.agent.auto_approve = True
                     self._run_child_task(child, task)
                     self.console.print(
@@ -156,7 +176,7 @@ class AutoRequestMixin:
                     )
                     if event.get("apply"):
                         name = self._unique_child_name(f"skill-{skill_name}")
-                        child = self._make_child(name)
+                        child = self._make_child(name, task_id=event_task_id or active_task_id)
                         task = (
                             f"Use the skill-creator workflow to improve skill `{skill_name}`. "
                             f"Reusable note: {note}. Reason: {reason}. Keep the edit concise, "
@@ -172,5 +192,13 @@ class AutoRequestMixin:
             if clear_after:
                 self.agent.clear_history(archive=True)
         finally:
+            if deferred_lines:
+                try:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(path, "a", encoding="utf-8") as f:
+                        for raw in deferred_lines:
+                            f.write(raw.rstrip("\n") + "\n")
+                except Exception as e:
+                    self.console.print(f"[yellow]auto request defer failed[/] [dim]{e}[/]")
             self._auto_requests_processing = False
 

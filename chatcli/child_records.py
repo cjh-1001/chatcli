@@ -64,6 +64,7 @@ class ChildRecordMixin:
                 f"- Created: {child.created_at}\n"
                 f"- Updated: {child.updated_at or child.created_at}\n"
                 f"- Completed: {child.completed_at or ''}\n"
+                f"- Task ID: {child.task_id or ''}\n"
                 f"- Task: {child.task}\n"
                 f"- Summary: {child.summary or ''}\n\n"
                 "## Result\n\n"
@@ -90,6 +91,7 @@ class ChildRecordMixin:
                 "name": child.name,
                 "status": child.status,
                 "task": child.task,
+                "task_id": child.task_id,
                 "summary": child.summary,
                 "created_at": child.created_at,
                 "updated_at": child.updated_at or child.created_at,

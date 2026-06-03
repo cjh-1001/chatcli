@@ -28,6 +28,8 @@ BUILTIN_ASK_TOOLS = (
     "external_static_analyze", "yara_scan", "upx_unpack", "binary_patch",
     "chatcli_auto_request",
 )
+CONFIG_FILENAMES = ("config.yaml", "config.yml")
+
 BUILTIN_SENSITIVE_PATTERNS = (
     ".chatcli/config.yaml",
     ".chatcli/config.yml",
@@ -93,24 +95,55 @@ class Config:
     context_file: str = ".chatcli/context.md"
 
     @classmethod
+    def find_config_file(cls, path: str | None = None) -> Path | None:
+        """Return the first config file that would be loaded."""
+        for p in cls._candidate_paths(path):
+            if p and Path(p).exists():
+                return Path(p)
+        return None
+
+    @classmethod
+    def find_workspace_config_file(cls) -> Path | None:
+        """Return a config from the current directory or one of its parents."""
+        for p in cls._workspace_candidate_paths():
+            if p.exists():
+                return p
+        return None
+
+    @classmethod
+    def default_config_file(cls) -> Path:
+        """Return where first-run setup should create a project config."""
+        if os.environ.get("CHATCLI_CONFIG"):
+            return Path(os.environ["CHATCLI_CONFIG"]).expanduser()
+        return Path.cwd() / ".chatcli" / "config.yaml"
+
+    @staticmethod
+    def _workspace_candidate_paths() -> list[Path]:
+        cwd = Path.cwd().resolve()
+        home = Path.home().resolve()
+        return [
+            parent / ".chatcli" / filename
+            for parent in (cwd, *cwd.parents)
+            if parent != home or cwd == home
+            for filename in CONFIG_FILENAMES
+        ]
+
+    @staticmethod
+    def _candidate_paths(path: str | None = None) -> list[str | Path | None]:
+        return [
+            path,
+            os.environ.get("CHATCLI_CONFIG"),
+            *Config._workspace_candidate_paths(),
+            *(Path.home() / ".chatcli" / filename for filename in CONFIG_FILENAMES),
+        ]
+
+    @classmethod
     def load(cls, path: str | None = None) -> "Config":
         """Load config from file, with env var overrides."""
         cfg = cls()
-        cwd = Path.cwd().resolve()
-        project_configs = [
-            parent / ".chatcli" / "config.yaml"
-            for parent in (cwd, *cwd.parents)
-        ]
-
-        search_paths = [
-            path,
-            os.environ.get("CHATCLI_CONFIG"),
-            *project_configs,
-            Path.home() / ".chatcli" / "config.yaml",
-        ]
 
         config_file = None
-        for p in search_paths:
+        for p in cls._candidate_paths(path):
             if p and Path(p).exists():
                 config_file = p
                 break
