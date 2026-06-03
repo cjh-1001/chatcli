@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from .base import Tool, ToolResult
-from .ida import _cleanup_paths, _default_ida_json_path, _find_ida, _load_reusable_json
+from .ida import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
 
 
 IDA_FOCUS_SCRIPT = r'''
@@ -237,7 +237,7 @@ class IdaFocusDecompileTool(Tool):
                 "description": "Function starts, addresses, or names to inspect, e.g. 0x140001280.",
                 "items": {"type": "string"},
             },
-            "ida_path": {"type": "string", "description": "Optional IDA executable path."},
+            "ida_path": {"type": "string", "description": "Optional path to idat64/idat/ida64/ida or an IDA install directory."},
             "output_path": {"type": "string", "description": "Optional JSON output path."},
             "timeout": {"type": "integer", "description": "Timeout in milliseconds. Default 180000."},
             "auto_wait_timeout": {"type": "integer", "description": "Seconds to wait for auto-analysis. Default 15."},
@@ -286,7 +286,7 @@ class IdaFocusDecompileTool(Tool):
 
         ida = _find_ida(ida_path or self.default_ida_path)
         if not ida:
-            return ToolResult(content="IDA executable not found.", is_error=True)
+            return ToolResult(content=_ida_not_found_message(), is_error=True)
 
         normalized_targets = [str(t) for t in targets]
         cache_extra = json.dumps({

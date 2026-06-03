@@ -17,6 +17,18 @@ def _parse_hex(value: str) -> bytes:
     return bytes.fromhex(cleaned)
 
 
+def _parse_int(value, name: str) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, int):
+        return value
+    text = str(value).strip().replace("_", "")
+    try:
+        return int(text, 16 if text.lower().startswith("0x") else 10)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a decimal integer or 0x-prefixed hex offset, got {value!r}") from e
+
+
 def _load_binary(path: Path) -> bytes:
     if not path.exists():
         raise FileNotFoundError(path)
@@ -69,8 +81,8 @@ class BinaryFindTool(Tool):
                 "description": "UTF-16LE string to search for.",
             },
             "start_offset": {
-                "type": "integer",
-                "description": "Start searching at this file offset. Default 0.",
+                "type": ["integer", "string"],
+                "description": "Start searching at this file offset. Accepts decimal or 0x-prefixed hex. Default 0.",
             },
             "max_matches": {
                 "type": "integer",
@@ -90,7 +102,7 @@ class BinaryFindTool(Tool):
         query_hex: str = "",
         query_ascii: str = "",
         query_wide: str = "",
-        start_offset: int = 0,
+        start_offset: int | str = 0,
         max_matches: int = 50,
         context_bytes: int = 16,
         **kwargs,
@@ -119,9 +131,12 @@ class BinaryFindTool(Tool):
 
         if not needle:
             return ToolResult(content="Error: query cannot be empty.", is_error=True)
-        start_offset = max(0, int(start_offset or 0))
-        max_matches = max(1, min(int(max_matches or 50), 1000))
-        context_bytes = max(0, min(int(context_bytes or 16), 128))
+        try:
+            start_offset = max(0, _parse_int(start_offset, "start_offset"))
+            max_matches = max(1, min(_parse_int(max_matches, "max_matches") or 50, 1000))
+            context_bytes = max(0, min(_parse_int(context_bytes, "context_bytes") or 16, 128))
+        except ValueError as e:
+            return ToolResult(content=f"Error: {e}", is_error=True)
 
         matches = []
         pos = start_offset
@@ -176,8 +191,8 @@ class BinaryHexdumpTool(Tool):
                 "description": "Absolute path to the binary.",
             },
             "offset": {
-                "type": "integer",
-                "description": "File offset to start dumping from.",
+                "type": ["integer", "string"],
+                "description": "File offset to start dumping from. Accepts decimal or 0x-prefixed hex.",
             },
             "length": {
                 "type": "integer",
@@ -194,9 +209,9 @@ class BinaryHexdumpTool(Tool):
     def execute(
         self,
         file_path: str,
-        offset: int,
-        length: int = 256,
-        width: int = 16,
+        offset: int | str,
+        length: int | str = 256,
+        width: int | str = 16,
         **kwargs,
     ) -> ToolResult:
         path = Path(file_path)
@@ -205,9 +220,12 @@ class BinaryHexdumpTool(Tool):
         except Exception as e:
             return ToolResult(content=f"Error: {e}", is_error=True)
 
-        offset = max(0, int(offset or 0))
-        length = max(1, min(int(length or 256), 4096))
-        width = max(4, min(int(width or 16), 32))
+        try:
+            offset = max(0, _parse_int(offset, "offset"))
+            length = max(1, min(_parse_int(length, "length") or 256, 4096))
+            width = max(4, min(_parse_int(width, "width") or 16, 32))
+        except ValueError as e:
+            return ToolResult(content=f"Error: {e}", is_error=True)
         if offset >= len(data):
             return ToolResult(content="Error: offset is beyond end of file.", is_error=True)
 

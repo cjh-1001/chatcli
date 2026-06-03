@@ -66,11 +66,53 @@ def _cleanup_paths(*paths: Path) -> None:
             pass
 
 
+def _headless_siblings(path: Path) -> list[Path]:
+    return [path / name for name in ("idat64.exe", "idat.exe", "idat64", "idat")]
+
+
+def _common_ida_locations() -> list[Path]:
+    roots: list[Path] = []
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        value = os.environ.get(env_name)
+        if value:
+            roots.append(Path(value))
+    roots.extend([Path("C:/Program Files"), Path("C:/Program Files (x86)"), Path("C:/IDA"), Path("C:/IDA Pro")])
+
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists():
+            continue
+        for pattern in ("IDA*", "Hex-Rays*", "IDA Pro*"):
+            for path in root.glob(pattern):
+                key = str(path).lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.extend(_headless_siblings(path))
+                candidates.extend([path / "ida64.exe", path / "ida.exe"])
+    return candidates
+
+
+def _ida_not_found_message() -> str:
+    return (
+        "IDA executable not found. Install IDA Pro/Free and configure one of: "
+        "IDA_PATH, IDAT64_PATH, IDAT_PATH, IDA64_PATH, PATH, or pass ida_path. "
+        "ida_path may point to idat64/idat/ida64/ida or to an IDA install directory. "
+        "Run ida_probe for diagnostics. Continue without IDA using binary_inspect, "
+        "encoded_string_extract, obfuscated_data_map, binary_find, and binary_hexdump."
+    )
+
+
 def _find_ida(explicit: str | None = None) -> str | None:
     candidates = []
 
     def add_candidate(value: str) -> None:
         path = Path(value)
+        if path.exists() and path.is_dir():
+            candidates.extend(str(p) for p in _headless_siblings(path))
+            candidates.extend(str(path / name) for name in ("ida64.exe", "ida.exe", "ida64", "ida"))
+            return
         if path.name.lower() in {"ida.exe", "ida64.exe", "ida", "ida64"}:
             for sibling in ("idat64.exe", "idat.exe", "idat64", "idat"):
                 headless = path.parent / sibling
@@ -89,6 +131,7 @@ def _find_ida(explicit: str | None = None) -> str | None:
         found = shutil.which(name)
         if found:
             candidates.append(found)
+    candidates.extend(str(path) for path in _common_ida_locations())
 
     for candidate in candidates:
         path = Path(candidate)
@@ -98,6 +141,59 @@ def _find_ida(explicit: str | None = None) -> str | None:
         if found:
             return found
     return None
+
+
+class IdaProbeTool(Tool):
+    name = "ida_probe"
+    description = (
+        "Diagnose IDA availability for headless analysis. Checks explicit ida_path, "
+        "IDA-related environment variables, PATH lookup, and common Windows install "
+        "directories. Does not run IDA or the target binary."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "ida_path": {
+                "type": "string",
+                "description": "Optional path to idat64/idat/ida64/ida or an IDA install directory.",
+            },
+        },
+    }
+
+    def __init__(self, default_ida_path: str = ""):
+        self.default_ida_path = default_ida_path
+
+    def execute(self, ida_path: str | None = None, **kwargs) -> ToolResult:
+        explicit = ida_path or self.default_ida_path or ""
+        resolved = _find_ida(explicit)
+        lines = [
+            "# IDA Probe",
+            "",
+            f"Resolved IDA: {resolved or '(not found)'}",
+            "",
+            "## Configuration",
+            f"- explicit/default ida_path: {explicit or '(none)'}",
+        ]
+        for env_name in ("IDA_PATH", "IDAT64_PATH", "IDAT_PATH", "IDA64_PATH"):
+            lines.append(f"- {env_name}: {os.environ.get(env_name) or '(unset)'}")
+        lines.extend(["", "## PATH lookup"])
+        for name in ("idat64", "idat", "ida64", "ida"):
+            lines.append(f"- {name}: {shutil.which(name) or '(not found)'}")
+        lines.extend(["", "## Common install candidates"])
+        common = _common_ida_locations()
+        if common:
+            for path in common[:40]:
+                status = "exists" if path.exists() and path.is_file() else "missing"
+                lines.append(f"- {path} [{status}]")
+        else:
+            lines.append("- No common install directories found.")
+        if not resolved:
+            lines.extend(["", "## Next Steps", f"- {_ida_not_found_message()}"])
+        return ToolResult(
+            content="\n".join(lines),
+            is_error=not bool(resolved),
+            metadata={"ida_path": resolved, "found": bool(resolved)},
+        )
 
 
 def _format_summary(data: dict, output_path: Path) -> str:
@@ -185,7 +281,7 @@ class IdaAnalyzeTool(Tool):
             },
             "ida_path": {
                 "type": "string",
-                "description": "Optional path to idat64/idat/ida64/ida. Defaults to IDA_PATH env or PATH lookup.",
+                "description": "Optional path to idat64/idat/ida64/ida or an IDA install directory. Defaults to IDA_PATH env or PATH lookup.",
             },
             "output_path": {
                 "type": "string",
@@ -243,11 +339,7 @@ class IdaAnalyzeTool(Tool):
         ida = _find_ida(ida_path or self.default_ida_path)
         if not ida:
             return ToolResult(
-                content=(
-                    "IDA executable not found. Install IDA Pro/Free and either set IDA_PATH "
-                    "to idat64/idat/ida64/ida, add it to PATH, or pass ida_path. "
-                    "Use binary_inspect for dependency-free static triage."
-                ),
+                content=_ida_not_found_message(),
                 is_error=True,
             )
 

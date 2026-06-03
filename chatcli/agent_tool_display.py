@@ -24,6 +24,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
         "binary_inspect": "Inspect binary",
         "binary_find": "Find bytes",
         "binary_hexdump": "Hexdump",
+        "ida_probe": "IDA probe",
         "ida_analyze": "IDA analyze",
         "ida_focus_decompile": "IDA focus",
         "ida_deobfuscate": "IDA deobf",
@@ -35,6 +36,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
         "external_static_analyze": "External scan",
         "yara_scan": "YARA",
         "upx_unpack": "UPX",
+        "tool_health_check": "Tool check",
         "web_search": "Web search",
         "web_fetch": "Fetch",
     }
@@ -54,6 +56,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
         "binary_inspect":(">", "cyan"),
         "binary_find":(">", "magenta"),
         "binary_hexdump":(">", "magenta"),
+        "ida_probe":(">", "magenta"),
         "ida_analyze":(">", "magenta"),
         "ida_focus_decompile":(">", "magenta"),
         "ida_deobfuscate":(">", "magenta"),
@@ -65,6 +68,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
         "external_static_analyze":(">", "magenta"),
         "yara_scan":(">", "magenta"),
         "upx_unpack":(">", "yellow"),
+        "tool_health_check":(">", "cyan"),
         "web_search":(">", "magenta"),
         "web_fetch": (">", "magenta"),
     }
@@ -81,7 +85,8 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
             "web_search": "query", "web_fetch": "url",
             "git_diff": "path",
             "binary_inspect": "file_path", "binary_find": "file_path",
-            "binary_hexdump": "file_path", "ida_analyze": "file_path",
+            "binary_hexdump": "file_path", "ida_probe": "ida_path",
+            "ida_analyze": "file_path",
             "ida_focus_decompile": "targets",
             "ida_deobfuscate": "file_path", "encoded_string_extract": "file_path",
             "obfuscated_data_map": "file_path",
@@ -90,6 +95,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
             "runtime_string_hooks": "output_dir",
             "external_static_analyze": "file_path", "yara_scan": "target_path",
             "upx_unpack": "file_path",
+            "tool_health_check": "tools",
         }
         key = primary.get(name)
         if key and key in params:
@@ -114,6 +120,7 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
             "git_diff",
             "binary_find",
             "binary_hexdump",
+            "ida_probe",
         ):
             return bool(summary and len([p for p in summary.split(" | ") if p.strip()]) > 1)
         return True

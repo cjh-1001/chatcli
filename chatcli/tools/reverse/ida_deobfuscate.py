@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from ..base import Tool, ToolResult
-from ..ida import _cleanup_paths, _default_ida_json_path, _find_ida, _load_reusable_json
+from ..ida import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
 
 from .ida_deobfuscate_script import IDA_DEOBFUSCATE_SCRIPT
 
@@ -142,7 +142,7 @@ class IdaDeobfuscateTool(Tool):
         "type": "object",
         "properties": {
             "file_path": {"type": "string", "description": "Absolute path to the binary to load in IDA."},
-            "ida_path": {"type": "string", "description": "Optional path to idat64/idat/ida64/ida."},
+            "ida_path": {"type": "string", "description": "Optional path to idat64/idat/ida64/ida or an IDA install directory."},
             "output_path": {"type": "string", "description": "Optional JSON output path. Defaults to temp file."},
             "timeout": {"type": "integer", "description": "Timeout in milliseconds. Default 180000, max 900000."},
             "patch_database": {
@@ -230,11 +230,7 @@ class IdaDeobfuscateTool(Tool):
         ida = _find_ida(ida_path or self.default_ida_path)
         if not ida:
             return ToolResult(
-                content=(
-                    "IDA executable not found. Install IDA Pro/Free and set IDA_PATH, add it "
-                    "to PATH, or pass ida_path. Use encoded_string_extract and binary_inspect "
-                    "for dependency-free triage."
-                ),
+                content=_ida_not_found_message(),
                 is_error=True,
             )
 

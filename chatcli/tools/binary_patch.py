@@ -24,6 +24,18 @@ def _parse_hex(value: str, name: str) -> bytes:
         raise ValueError(f"{name} is not valid hex: {e}") from e
 
 
+def _parse_int(value, name: str) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, int):
+        return value
+    text = str(value).strip().replace("_", "")
+    try:
+        return int(text, 16 if text.lower().startswith("0x") else 10)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a decimal integer or 0x-prefixed hex offset, got {value!r}") from e
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -61,8 +73,8 @@ class BinaryPatchTool(Tool):
                 "description": "Patch mode.",
             },
             "offset": {
-                "type": "integer",
-                "description": "File offset for replace_at_offset mode. Decimal integer.",
+                "type": ["integer", "string"],
+                "description": "File offset for replace_at_offset mode. Accepts decimal or 0x-prefixed hex.",
             },
             "old_hex": {
                 "type": "string",
@@ -97,7 +109,7 @@ class BinaryPatchTool(Tool):
         file_path: str,
         mode: str,
         new_hex: str,
-        offset: int | None = None,
+        offset: int | str | None = None,
         old_hex: str = "",
         occurrence: int = 1,
         output_path: str = "",
@@ -138,17 +150,21 @@ class BinaryPatchTool(Tool):
 
         mode = mode.strip().lower()
         if mode == "replace_at_offset":
-            if offset is None or offset < 0:
+            try:
+                parsed_offset = _parse_int(offset, "offset") if offset is not None else -1
+            except ValueError as e:
+                return ToolResult(content=f"Error: {e}", is_error=True)
+            if parsed_offset < 0:
                 return ToolResult(content="Error: offset must be a non-negative integer.", is_error=True)
-            if offset + len(new) > len(data):
+            if parsed_offset + len(new) > len(data):
                 return ToolResult(content="Error: patch extends beyond end of file.", is_error=True)
             if old:
-                current = data[offset:offset + len(old)]
+                current = data[parsed_offset:parsed_offset + len(old)]
                 if current != old:
                     return ToolResult(
                         content=(
                             "Error: old_hex verification failed at offset "
-                            f"0x{offset:x}. actual={current.hex(' ')}"
+                            f"0x{parsed_offset:x}. actual={current.hex(' ')}"
                         ),
                         is_error=True,
                     )
@@ -157,7 +173,7 @@ class BinaryPatchTool(Tool):
                         content="Error: old_hex and new_hex must be the same length.",
                         is_error=True,
                     )
-            patch_offset = offset
+            patch_offset = parsed_offset
             patch_len = len(new)
         elif mode == "find_replace":
             if not old:

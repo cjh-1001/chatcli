@@ -292,6 +292,19 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         table.add_row("API key", "set" if provider.api_key else "missing")
         table.add_row("Timeout", f"{getattr(self.config, 'request_timeout', 120)}s")
         table.add_row("Tools", str(len(self.agent.tools.list_tools())))
+        health_tool = self.agent.tools.get("tool_health_check")
+        if health_tool:
+            health = health_tool.execute()
+            meta = health.metadata or {}
+            missing = meta.get("missing") or []
+            missing_text = ", ".join(missing[:5])
+            if len(missing) > 5:
+                missing_text += ", ..."
+            table.add_row(
+                "Tool health",
+                f"{meta.get('available', 0)}/{meta.get('checked', 0)} available"
+                + (f" (missing: {missing_text})" if missing_text else ""),
+            )
         skills = discover_skills(self.config.workspace)
         if skills:
             names = ", ".join(skill.name for skill in skills[:6])

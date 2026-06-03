@@ -70,6 +70,10 @@ class AgentToolSummaryMixin:
                 parts.append("off=0x%x" % int(meta["offset"]))
             if "length" in meta:
                 parts.append(f"{meta['length']} bytes")
+        elif name == "ida_probe":
+            parts.append("found" if meta.get("found") else "not found")
+            if meta.get("ida_path"):
+                parts.append(str(meta["ida_path"]))
         elif name == "ida_analyze":
             if "entry_analysis_order" in meta:
                 parts.append(f"{meta['entry_analysis_order']} entry-order")
@@ -163,6 +167,11 @@ class AgentToolSummaryMixin:
                 parts.append("created" if meta["created"] else "no output")
             if "output" in meta:
                 parts.append(str(meta["output"]))
+        elif name == "tool_health_check":
+            if "available" in meta and "checked" in meta:
+                parts.append(f"{meta['available']}/{meta['checked']} available")
+            if meta.get("missing"):
+                parts.append(f"missing={len(meta['missing'])}")
         parts.append(self._fmt_time(elapsed))
         return " | ".join(str(p) for p in parts if p is not None)
 

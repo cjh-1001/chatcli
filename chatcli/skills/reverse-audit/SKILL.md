@@ -1,35 +1,36 @@
 ---
 name: reverse-audit
 description: Authorized reverse-engineering and crackme/CTF validation-audit workflow. Use for /reverse, /crack, /crackme, /patch, binary patch audits, PE/ELF/Mach-O triage, validation logic review, crypto/encoding/compression/hash review, anti-debug review, packed binary triage, driver/IOCTL analysis, or local binary audit tasks.
-aliases:
-  - reverse
-  - crackme
-  - binary-audit
-triggers:
-  - /reverse
-  - /crack
-  - /crackme
-  - /patch
-  - ida
-  - idapython
-  - binary
-  - pe
-  - elf
-  - macho
-  - crackme
-  - ctf
-  - control-flow flattening
-  - opaque predicate
-  - encrypted strings
-  - packed
-  - ioctl
-  - driver
-  - 逆向
-  - 反编译
-  - 花指令
-  - 控制流扁平化
-  - 不透明谓词
-  - 字符串加密
+metadata:
+  aliases:
+    - reverse
+    - crackme
+    - binary-audit
+  triggers:
+    - /reverse
+    - /crack
+    - /crackme
+    - /patch
+    - ida
+    - idapython
+    - binary
+    - pe
+    - elf
+    - macho
+    - crackme
+    - ctf
+    - control-flow flattening
+    - opaque predicate
+    - encrypted strings
+    - packed
+    - ioctl
+    - driver
+    - 逆向
+    - 反编译
+    - 花指令
+    - 控制流扁平化
+    - 不透明谓词
+    - 字符串加密
 ---
 
 # Reverse Audit Skill
@@ -39,6 +40,15 @@ training samples, malware triage, or CTF/crackme challenges. Do not help with
 piracy, DRM bypass, real-world license bypass, credential theft, persistence,
 stealth, real unauthorized access, or privilege escalation. Do not execute unknown
 binaries.
+
+For malware, trojan, backdoor, RAT, or suspicious attack samples, use this skill
+for focused function-level reverse engineering, unpacking evidence, decoder/config
+logic, API hashing, IOCTL mapping, or pseudocode interpretation. Use the
+`malware-triage` reporting structure for the final defensive conclusion: attack
+behavior chain, evidence, confidence, IOCs, impact assessment, detection ideas,
+and containment/remediation guidance. Do not turn malware reversing notes into
+payload improvement, persistence/evasion implementation, credential theft
+automation, or live C2 operation instructions.
 
 For authorized CTF/crackme training samples, practical challenge-solving is
 allowed when it is evidence-driven and local to the artifact. It is appropriate
@@ -95,6 +105,11 @@ unless the target, ownership, or validation boundary changes.
    - If IDA is configured and function logic matters, use `ida_analyze` after
      lightweight triage. Use binary_inspect strings/imports/packer clues as IDA
      analysis hints.
+   - On a new machine, after an "IDA executable not found" error, or when the
+     configured path is uncertain, run `ida_probe` before retrying IDA tools. If
+     it cannot resolve IDA, continue with `binary_inspect`,
+     `encoded_string_extract`, `obfuscated_data_map`, `binary_find`, and
+     `binary_hexdump`, and report the missing IDA configuration clearly.
    - After `ida_analyze` or `ida_deobfuscate` writes JSON, run
      `reverse_evidence_map` before drawing conclusions. Use it to compactly
      extract imports, strings, xrefs, candidate functions, pseudocode hits, and
