@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import platform
 import shutil
+import shlex
 import sys
 import threading
 from rich.console import Console
@@ -125,6 +126,7 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         if c=="/session": return self._handle_session(a)
         if c=="/history": return self._handle_history(a)
         if c=="/skills": return self._handle_skills(a)
+        if c=="/tools": return self._handle_tools(a)
         if c=="/child": return self._handle_child(a)
         if c in ("/auto-requests", "/autorequests"): return self._handle_auto_requests(a)
         if c=="/plan":
@@ -276,6 +278,33 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
             self._process_auto_requests()
             return True
         self.console.print("[yellow]Usage: /skills list | match <query> | improve <skill> <note>[/]")
+        return True
+    def _handle_tools(self, a):
+        try:
+            parts = shlex.split(a) if a else []
+        except ValueError as e:
+            self.console.print(f"[yellow]Invalid arguments:[/] {e}")
+            return True
+        action = parts[0].lower() if parts else "list"
+        if action in ("list", "ls"):
+            table = Table(title="Tools", box=box.SIMPLE, show_lines=False)
+            table.add_column("Name", style="cyan", no_wrap=True)
+            table.add_column("Description")
+            for tool in self.agent.tools.list_tools():
+                table.add_row(tool.name, (tool.description or "")[:120])
+            self.console.print(table)
+            return True
+        if action in ("check", "doctor", "health", "probe"):
+            include_versions = any(p in ("--versions", "--version", "-v") for p in parts[1:])
+            names = [p for p in parts[1:] if p not in ("--versions", "--version", "-v")]
+            health_tool = self.agent.tools.get("tool_health_check")
+            if not health_tool:
+                self.console.print("[red]tool_health_check is not registered.[/]")
+                return True
+            result = health_tool.execute(tools=names or None, include_versions=include_versions)
+            self.console.print(result.content)
+            return True
+        self.console.print("[yellow]Usage: /tools list | /tools check [tool...] [--versions][/]")
         return True
     def _handle_doctor(self):
         table = Table(title="chatcli doctor", box=box.SIMPLE, show_lines=False)

@@ -27,6 +27,8 @@ COMMAND_DEFS = [
     ("Skill", "/skills list", "List loaded skills"),
     ("Skill", "/skills match <query>", "Show which skills match a request"),
     ("Skill", "/skills improve <skill> <note>", "Improve a skill with a reusable lesson"),
+    ("Tools", "/tools list", "List registered tools"),
+    ("Tools", "/tools check [tool...] [--versions]", "Check tool/dependency availability"),
     ("Window", "/child new <name> [task]", "Create a child analysis window"),
     ("Window", "/child run <name> <task>", "Run a child task in the background"),
     ("Window", "/child list", "List child windows"),
@@ -87,6 +89,11 @@ SUBCOMMANDS = {
         ("list", "List loaded skills"),
         ("match", "Rank skills for a request"),
         ("improve", "Improve a named skill"),
+    ],
+    "/tools": [
+        ("list", "List registered tools"),
+        ("check", "Check tool availability"),
+        ("--versions", "Include external tool versions"),
     ],
     "/child": [
         ("new", "Create a child window"),
