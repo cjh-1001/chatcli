@@ -1,0 +1,32 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test, type-checker, and coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local editor/assistant state
+.claude/
+.chatcli/
+chatcli/.chatcli/
+
+# Local scratch files generated during repository scans
+_scan.py
+_scan.txt
+_test.txt
+
+# Local test/challenge data and generated artifacts
+contest/
+easy/
+eval/
+target/
