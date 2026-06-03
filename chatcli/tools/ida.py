@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .base import Tool, ToolResult
 from .ida_script import IDA_SCRIPT
+from .reverse_text import optimize_ida_text_data, persist_optimized_json, rank_text_items, short_text
 
 
 def _safe_cache_name(value: str, fallback: str = "target") -> str:
@@ -197,6 +198,7 @@ class IdaProbeTool(Tool):
 
 
 def _format_summary(data: dict, output_path: Path) -> str:
+    text_stats = data.get("text_processing") or {}
     lines = [
         "# IDA Analysis",
         "",
@@ -213,6 +215,9 @@ def _format_summary(data: dict, output_path: Path) -> str:
         f"Candidate functions: {len(data.get('candidate_functions', []))}",
         f"Entry analysis order: {len(data.get('entry_analysis_order', []))}",
         f"Pseudocode functions: {len(data.get('pseudocode', []))}",
+        f"Text processing: strings={text_stats.get('strings_seen', 0)} "
+        f"changed={text_stats.get('strings_changed', 0)} "
+        f"low_signal={text_stats.get('low_signal_strings', 0)}",
     ]
     if data.get("partial"):
         lines.extend([
@@ -235,7 +240,7 @@ def _format_summary(data: dict, output_path: Path) -> str:
         "## Candidate Functions",
     ])
     for fn in data.get("candidate_functions", [])[:40]:
-        evidence = "; ".join(fn.get("evidence", [])[:3])
+        evidence = "; ".join(short_text(e, 100) for e in fn.get("evidence", [])[:3])
         suffix = f" evidence={evidence}" if evidence else ""
         lines.append(
             f"- {fn.get('start')} {fn.get('name')} score={fn.get('score')} "
@@ -253,14 +258,16 @@ def _format_summary(data: dict, output_path: Path) -> str:
         name = imp.get("name") or f"ordinal_{imp.get('ordinal')}"
         lines.append(f"- {module}!{name} @ {imp.get('ea')}")
     lines.extend(["", "## Strings"])
-    for s in data.get("strings", [])[:120]:
+    for s in rank_text_items(data.get("strings", []) or [])[:120]:
         xrefs = s.get("xrefs") or []
         suffix = f" xrefs={', '.join(xrefs[:4])}" if xrefs else ""
-        lines.append(f"- {s.get('ea')} {s.get('value')}{suffix}")
+        score = f" score={s.get('text_score')}" if s.get("text_score") is not None else ""
+        flags = f" flags={','.join(s.get('text_flags', []))}" if s.get("text_flags") else ""
+        lines.append(f"- {s.get('ea')}{score}{flags} {short_text(s.get('value'), 220)}{suffix}")
     if data.get("pseudocode"):
         lines.extend(["", "## Pseudocode"])
         for item in data.get("pseudocode", [])[:20]:
-            text = item.get("text", "")
+            text = short_text(item.get("text", ""), 4000, preserve_lines=True)
             first_lines = "\n".join(text.splitlines()[:40])
             lines.append(f"### {item.get('function')} @ {item.get('start')}\n```c\n{first_lines}\n```")
     return "\n".join(lines)
@@ -354,6 +361,8 @@ class IdaAnalyzeTool(Tool):
         if reuse_output and not output_path:
             cached = _load_reusable_json(out, target)
             if cached is not None:
+                optimize_ida_text_data(cached)
+                persist_optimized_json(out, cached)
                 emit_progress(f"ida_analyze reused cached JSON: {out}")
                 return ToolResult(
                     content=_format_summary(cached, out) + "\n\n[cached] Reused existing IDA JSON.",
@@ -469,6 +478,7 @@ class IdaAnalyzeTool(Tool):
                                     partial.setdefault("warnings", []).append(
                                         f"IDA analysis timed out after {int(timeout_sec)}s; using partial checkpoint."
                                     )
+                                    optimize_ida_text_data(partial)
                                     out.write_text(
                                         json.dumps(partial, ensure_ascii=False, indent=2),
                                         encoding="utf-8",
@@ -533,6 +543,8 @@ class IdaAnalyzeTool(Tool):
         except Exception as e:
             _cleanup_paths(stdout_path, stderr_path, progress_path)
             return ToolResult(content=f"IDA output JSON could not be read: {e}", is_error=True)
+        optimize_ida_text_data(data)
+        persist_optimized_json(out, data)
 
         _cleanup_paths(stdout_path, stderr_path, progress_path)
 

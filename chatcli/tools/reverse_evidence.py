@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .base import Tool, ToolResult
+from .reverse_text import optimize_ida_text_data, rank_text_items, short_text
 
 
 DEFAULT_KEYWORDS = [
@@ -37,7 +38,10 @@ DEFAULT_KEYWORDS = [
 
 
 def _load_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    if isinstance(data, dict):
+        optimize_ida_text_data(data)
+    return data
 
 
 def _contains_keyword(text: str, keywords: list[str]) -> bool:
@@ -46,10 +50,7 @@ def _contains_keyword(text: str, keywords: list[str]) -> bool:
 
 
 def _short(text: str, limit: int = 180) -> str:
-    text = re.sub(r"\s+", " ", str(text or "")).strip()
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
+    return short_text(text, limit)
 
 
 def _function_lookup(data: dict) -> dict[str, dict]:
@@ -176,14 +177,17 @@ class ReverseEvidenceMapTool(Tool):
             strings = [
                 item for item in data.get("strings", []) or []
                 if _contains_keyword(item.get("value", ""), keywords)
-            ][:max_items]
+            ]
+            strings = rank_text_items(strings)[:max_items]
             metadata["matched_strings"] += len(strings)
             if strings:
                 lines.extend(["", "### Matched Strings"])
                 for item in strings:
                     xrefs = ", ".join((item.get("xrefs") or [])[:6])
+                    score = f" score={item.get('text_score')}" if item.get("text_score") is not None else ""
+                    flags = f" flags={','.join(item.get('text_flags', []))}" if item.get("text_flags") else ""
                     lines.append(
-                        f"- {item.get('ea', '')}: {repr(_short(item.get('value', ''), 140))}"
+                        f"- {item.get('ea', '')}{score}{flags}: {repr(_short(item.get('value', ''), 140))}"
                         f" xrefs=[{xrefs}]"
                     )
 
@@ -224,7 +228,7 @@ class ReverseEvidenceMapTool(Tool):
             function_maps = data.get("function_maps", []) or []
             interesting_maps = []
             for item in function_maps:
-                strings_text = " ".join(s.get("value", "") for s in item.get("strings", []) or [])
+                strings_text = " ".join(s.get("value", "") for s in rank_text_items(item.get("strings", []) or []))
                 role = item.get("api_role") or {}
                 if (
                     _contains_keyword(strings_text, keywords)
@@ -239,7 +243,10 @@ class ReverseEvidenceMapTool(Tool):
             if interesting_maps:
                 lines.extend(["", "### Function Maps"])
                 for item in interesting_maps:
-                    strings_text = "; ".join(_short(s.get("value", ""), 80) for s in (item.get("strings") or [])[:3])
+                    strings_text = "; ".join(
+                        _short(s.get("value", ""), 80)
+                        for s in rank_text_items(item.get("strings", []) or [])[:3]
+                    )
                     role = (item.get("api_role") or {}).get("role", "")
                     lines.append(
                         f"- {item.get('start', '')} {item.get('name', '')} "

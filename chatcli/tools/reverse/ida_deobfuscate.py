@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..base import Tool, ToolResult
 from ..ida import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
+from ..reverse_text import optimize_ida_text_data, persist_optimized_json, rank_text_items, short_text
 
 from .ida_deobfuscate_script import IDA_DEOBFUSCATE_SCRIPT
 
@@ -46,6 +47,7 @@ def _render_ida_deobfuscate_script(
 
 
 def _format_deobfuscation_summary(data: dict, output_path: Path) -> str:
+    text_stats = data.get("text_processing") or {}
     lines = [
         "# IDA Deobfuscation",
         "",
@@ -64,6 +66,9 @@ def _format_deobfuscation_summary(data: dict, output_path: Path) -> str:
         f"External deobfuscators: {len(data.get('external_plugins', []))}",
         f"Strings: {len(data.get('strings', []))}",
         f"Pseudocode functions: {len(data.get('pseudocode', []))}",
+        f"Text processing: strings={text_stats.get('strings_seen', 0)} "
+        f"changed={text_stats.get('strings_changed', 0)} "
+        f"low_signal={text_stats.get('low_signal_strings', 0)}",
     ]
     if data.get("warnings"):
         lines.extend(["", "## Warnings"])
@@ -93,7 +98,11 @@ def _format_deobfuscation_summary(data: dict, output_path: Path) -> str:
         lines.append(f"- {item.get('start')} {item.get('name')} role={item.get('role')} evidence={evidence}")
     lines.extend(["", "## Function Maps"])
     for item in sorted(data.get("function_maps", []), key=lambda x: x.get("size", 0), reverse=True)[:20]:
-        strings = "; ".join((s.get("value", "") for s in item.get("strings", [])[:3] if s.get("value")))
+        strings = "; ".join(
+            short_text(s.get("value", ""), 90)
+            for s in rank_text_items(item.get("strings", []) or [])[:3]
+            if s.get("value")
+        )
         strings_suffix = f" strings={strings}" if strings else ""
         role = item.get("api_role") or {}
         role_suffix = f" role={role.get('role')}" if role.get("role") else ""
@@ -103,7 +112,7 @@ def _format_deobfuscation_summary(data: dict, output_path: Path) -> str:
             f"{role_suffix}{strings_suffix}"
         )
         for block in item.get("mapped_blocks", [])[:5]:
-            sample = "; ".join(block.get("sampled_instructions", [])[:2])
+            sample = "; ".join(short_text(s, 120) for s in block.get("sampled_instructions", [])[:2])
             lines.append(
                 f"  - block {block.get('start')}..{block.get('end')} size={block.get('size')} "
                 f"succs={','.join(block.get('succs', [])[:3])} "
@@ -124,7 +133,7 @@ def _format_deobfuscation_summary(data: dict, output_path: Path) -> str:
     if data.get("pseudocode"):
         lines.extend(["", "## Pseudocode"])
         for item in data.get("pseudocode", [])[:12]:
-            text = "\n".join((item.get("text") or "").splitlines()[:50])
+            text = "\n".join(short_text(item.get("text") or "", 6000, preserve_lines=True).splitlines()[:50])
             lines.append(f"### {item.get('function')} @ {item.get('start')}\n```c\n{text}\n```")
     return "\n".join(lines)
 
@@ -252,6 +261,8 @@ class IdaDeobfuscateTool(Tool):
         if reuse_output and not output_path and not patch_database:
             cached = _load_reusable_json(out, target)
             if cached is not None:
+                optimize_ida_text_data(cached)
+                persist_optimized_json(out, cached)
                 emit_progress(f"ida_deobfuscate reused cached JSON: {out}")
                 return ToolResult(
                     content=_format_deobfuscation_summary(cached, out) + "\n\n[cached] Reused existing IDA deobfuscation JSON.",
@@ -379,6 +390,8 @@ class IdaDeobfuscateTool(Tool):
         except Exception as e:
             _cleanup_paths(stdout_path, stderr_path, progress_path)
             return ToolResult(content=f"IDA deobfuscation JSON could not be read: {e}", is_error=True)
+        optimize_ida_text_data(data)
+        persist_optimized_json(out, data)
 
         _cleanup_paths(stdout_path, stderr_path, progress_path)
 

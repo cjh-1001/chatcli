@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .base import Tool, ToolResult
 from .ida import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
+from .reverse_text import optimize_ida_text_data, persist_optimized_json, rank_text_items, short_text
 
 
 IDA_FOCUS_SCRIPT = r'''
@@ -175,6 +176,7 @@ finally:
 
 
 def _format_focus_summary(data: dict, output_path: Path) -> str:
+    text_stats = data.get("text_processing") or {}
     lines = [
         "# IDA Focus Decompile",
         "",
@@ -182,6 +184,9 @@ def _format_focus_summary(data: dict, output_path: Path) -> str:
         f"Output JSON: {output_path}",
         f"Targets: {len(data.get('targets', []))}",
         f"Errors: {len(data.get('errors', []))}",
+        f"Text processing: strings={text_stats.get('strings_seen', 0)} "
+        f"changed={text_stats.get('strings_changed', 0)} "
+        f"low_signal={text_stats.get('low_signal_strings', 0)}",
     ]
     if data.get("fatal_error"):
         lines.append(f"Fatal error: {data.get('fatal_error')}")
@@ -199,8 +204,13 @@ def _format_focus_summary(data: dict, output_path: Path) -> str:
         ])
         if item.get("strings"):
             lines.append("### Strings")
-            for s in item.get("strings", [])[:20]:
-                lines.append(f"- {s.get('from')} -> {s.get('ea')}: {s.get('value')}")
+            for s in rank_text_items(item.get("strings", []) or [])[:20]:
+                score = f" score={s.get('text_score')}" if s.get("text_score") is not None else ""
+                flags = f" flags={','.join(s.get('text_flags', []))}" if s.get("text_flags") else ""
+                lines.append(
+                    f"- {s.get('from')} -> {s.get('ea')}{score}{flags}: "
+                    f"{short_text(s.get('value'), 220)}"
+                )
         if item.get("calls"):
             lines.append("### Calls")
             for call in item.get("calls", [])[:25]:
@@ -209,7 +219,7 @@ def _format_focus_summary(data: dict, output_path: Path) -> str:
         if item.get("pseudocode"):
             lines.append("### Pseudocode")
             lines.append("```c")
-            lines.append(item.get("pseudocode", ""))
+            lines.append(short_text(item.get("pseudocode", ""), 8000, preserve_lines=True))
             lines.append("```")
         elif item.get("pseudocode_error"):
             lines.append(f"### Pseudocode unavailable: {item.get('pseudocode_error')}")
@@ -301,6 +311,8 @@ class IdaFocusDecompileTool(Tool):
         if reuse_output and not output_path:
             cached = _load_reusable_json(out, target)
             if cached is not None:
+                optimize_ida_text_data(cached)
+                persist_optimized_json(out, cached)
                 emit_progress(f"ida_focus_decompile reused cached JSON: {out}")
                 return ToolResult(
                     content=_format_focus_summary(cached, out) + "\n\n[cached] Reused existing focused IDA JSON.",
@@ -414,6 +426,8 @@ class IdaFocusDecompileTool(Tool):
         except Exception as e:
             _cleanup_paths(stdout_path, stderr_path, progress_path)
             return ToolResult(content=f"IDA focus JSON could not be read: {e}", is_error=True)
+        optimize_ida_text_data(data)
+        persist_optimized_json(out, data)
         _cleanup_paths(stdout_path, stderr_path, progress_path)
         content = _format_focus_summary(data, out)
         return ToolResult(
