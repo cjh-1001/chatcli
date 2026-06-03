@@ -117,6 +117,16 @@ class Config:
             return Path(os.environ["CHATCLI_CONFIG"]).expanduser()
         return Path.cwd() / ".chatcli" / "config.yaml"
 
+    @classmethod
+    def global_config_file(cls) -> Path:
+        """Return the user-level config path shared by all workspaces."""
+        return Path.home() / ".chatcli" / "config.yaml"
+
+    @classmethod
+    def local_config_file(cls) -> Path:
+        """Return the current workspace config path."""
+        return Path.cwd() / ".chatcli" / "config.yaml"
+
     @staticmethod
     def _workspace_candidate_paths() -> list[Path]:
         cwd = Path.cwd().resolve()

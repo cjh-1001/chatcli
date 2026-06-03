@@ -162,6 +162,17 @@ Create memory files with write_file. The /memory command lists saved memories.
 - Report results and errors clearly
 """
 
+    # Load global context shared by all workspaces.
+    loaded_context_paths: set[Path] = set()
+    global_ctx_path = Path.home() / ".chatcli" / "context.md"
+    if global_ctx_path.exists():
+        try:
+            extra = global_ctx_path.read_text(encoding="utf-8")
+            prompt += f"\n## Global Context (from {global_ctx_path})\n{extra}\n"
+            loaded_context_paths.add(global_ctx_path.resolve())
+        except Exception as e:
+            print(f"[chatcli] Warning: failed to read: {e}", file=sys.stderr)
+
     # Load project context — walk up from cwd to root, like Claude Code
     context_loaded = False
     
@@ -173,6 +184,7 @@ Create memory files with write_file. The /memory command lists saved memories.
                 extra = ctx_path.read_text(encoding="utf-8")
                 prompt += f"\n## Project Context (from {ctx_path.name})\n{extra}\n"
                 context_loaded = True
+                loaded_context_paths.add(ctx_path.resolve())
             except Exception as e:
                 print(f"[chatcli] Warning: failed to read: {e}", file=sys.stderr)
     
@@ -190,12 +202,12 @@ Create memory files with write_file. The /memory command lists saved memories.
             
             for candidate in ["CLAUDE.md", ".chatcli/context.md"]:
                 ctx_path = current / candidate
-                if ctx_path.exists() and ctx_path not in visited:
+                if ctx_path.exists() and ctx_path.resolve() not in loaded_context_paths:
                     try:
                         extra = ctx_path.read_text(encoding="utf-8")
                         # Order: root-to-leaf (closest to cwd last = most relevant)
                         parts.insert(0, f"<!-- from {ctx_path} -->\n{extra}\n")
-                        visited.add(ctx_path)
+                        loaded_context_paths.add(ctx_path.resolve())
                     except Exception as e:
                         print(f"[chatcli] Warning: failed to read: {e}", file=sys.stderr)
             
@@ -215,10 +227,11 @@ Create memory files with write_file. The /memory command lists saved memories.
             cwd / "CLAUDE.md",
         ]
         for ctx_path in context_paths:
-            if ctx_path.exists():
+            if ctx_path.exists() and ctx_path.resolve() not in loaded_context_paths:
                 try:
                     extra = ctx_path.read_text(encoding="utf-8")
                     prompt += f"\n## Project Context (from {ctx_path.name})\n{extra}\n"
+                    loaded_context_paths.add(ctx_path.resolve())
                 except Exception:
                     pass
                 break

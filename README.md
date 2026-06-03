@@ -24,18 +24,25 @@ chatcli 需要 Python 3.10 或更高版本。
 
 ### 2. 初始化配置
 
-在你要使用 chatcli 的项目目录里直接运行：
+推荐先创建全局配置，这样像 Claude 一样在任意目录直接运行 `chatcli` 都能用同一套 provider/API key 设置：
 
 ```powershell
-chatcli
+chatcli --setup --global
 ```
 
-如果当前目录或父目录没有 `.chatcli/config.yaml` / `.chatcli/config.yml`，chatcli 会自动创建配置文件并进入交互式配置向导。
+它会创建：
 
-也可以手动初始化或重新进入配置向导：
+```text
+~/.chatcli/config.yaml
+~/.chatcli/context.md
+```
+
+`~/.chatcli/config.yaml` 是用户级配置，所有项目默认都可以复用。`~/.chatcli/context.md` 是全局上下文，可以写长期偏好、常用约定和固定提示词。
+
+如果只想给当前项目创建单独配置：
 
 ```powershell
-chatcli --setup
+chatcli --setup --local
 ```
 
 它会创建：
@@ -45,7 +52,25 @@ chatcli --setup
 .chatcli/context.md
 ```
 
-`.chatcli/config.yaml` 是本项目的配置文件，`.chatcli/context.md` 可以写项目背景、技术栈、约定和长期提示词。设置了 `CHATCLI_CONFIG` 时，chatcli 会优先使用并在缺失时创建该路径指向的配置文件。
+项目级配置会覆盖全局配置。已经在项目里有 `.chatcli/config.yaml` 时，如果仍想强制使用全局配置：
+
+```powershell
+chatcli --global
+```
+
+在没有任何配置时，直接运行：
+
+```powershell
+chatcli
+```
+
+chatcli 会自动创建当前项目的 `.chatcli/config.yaml` 并进入交互式配置向导。也可以手动初始化或重新进入当前项目配置向导：
+
+```powershell
+chatcli --setup
+```
+
+设置了 `CHATCLI_CONFIG` 时，chatcli 会优先使用并在缺失时创建该路径指向的配置文件。
 
 ### 3. 配置 API Key
 
@@ -111,6 +136,12 @@ chatcli
 
 ```powershell
 chatcli "帮我检查这个项目的入口文件"
+```
+
+强制使用全局配置：
+
+```powershell
+chatcli --global "帮我检查这个项目的入口文件"
 ```
 
 脚本友好的单次输出：

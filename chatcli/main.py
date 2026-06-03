@@ -4,7 +4,9 @@ Usage:
     chatcli              # Interactive REPL
     chatcli "query"      # Single-shot query
     chatcli --print "query"  # Single-shot query for scripts
-    chatcli --setup      # Create default config
+    chatcli --setup      # Create local project config
+    chatcli --setup --global  # Create user config shared by all projects
+    chatcli --global "query"  # Use the user config even inside a project
 """
 
 import sys
@@ -320,32 +322,33 @@ def guide_config(config_file: Path, preserve_template: bool = False) -> None:
     print(f"配置已更新：{config_file}")
 
 
-def _first_run_config_file() -> Path | None:
+def _first_run_config_file(config_file: Path | None = None) -> Path | None:
+    if config_file is not None:
+        return None if config_file.exists() else config_file
     if os.environ.get("CHATCLI_CONFIG"):
         config_file = Config.default_config_file()
         return None if config_file.exists() else config_file
-    if Config.find_workspace_config_file() is None:
-        return Config.default_config_file()
     if Config.find_config_file() is None:
         return Config.default_config_file()
     return None
 
 
-def ensure_first_run_config(interactive: bool) -> Config:
-    config_file = _first_run_config_file()
-    if config_file is not None:
+def ensure_first_run_config(interactive: bool, config_file: Path | None = None) -> Config:
+    requested_config_file = config_file
+    first_run_config_file = _first_run_config_file(requested_config_file)
+    if first_run_config_file is not None:
         settings = _detected_provider_settings()
-        setup_config(config_file, settings=settings, quiet=not interactive)
+        setup_config(first_run_config_file, settings=settings, quiet=not interactive)
         if interactive:
             print("未发现当前环境配置文件，已自动创建默认配置。")
-            guide_config(config_file, preserve_template=True)
+            guide_config(first_run_config_file, preserve_template=True)
 
-    config = Config.load()
+    config = Config.load(str(requested_config_file) if requested_config_file else None)
     if not config.provider.api_key and interactive:
-        config_file = Config.find_config_file() or Config.default_config_file()
+        config_file = requested_config_file or Config.find_config_file() or Config.default_config_file()
         print("\n当前配置还没有可用 API key，进入配置向导。")
         guide_config(config_file, preserve_template=False)
-        config = Config.load()
+        config = Config.load(str(config_file) if config_file else None)
     return config
 
 
@@ -354,18 +357,22 @@ def main():
     force_evolve = False
     force_print = False
     evolve_focus = ""
+    setup_requested = False
+    setup_scope = "local"
+    config_override: Path | None = None
     positional: list[str] = []
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         arg = args[i]
         if arg in ("--setup", "-s"):
-            config_file = Config.default_config_file()
-            preserve_template = not config_file.exists()
-            config_file = setup_config(config_file)
-            if sys.stdin.isatty() and sys.stdout.isatty():
-                guide_config(config_file, preserve_template=preserve_template)
-            return
+            setup_requested = True
+        elif arg == "--global":
+            setup_scope = "global"
+            config_override = Config.global_config_file()
+        elif arg in ("--local", "--project"):
+            setup_scope = "local"
+            config_override = Config.local_config_file()
         if arg in ("--version", "-v"):
             from . import __version__
             print(f"chatcli v{__version__}")
@@ -382,13 +389,27 @@ def main():
         elif arg == "--focus" and i + 1 < len(args):
             evolve_focus = args[i + 1]
             i += 1
+        elif arg in ("--setup", "-s", "--global", "--local", "--project"):
+            pass
         else:
             positional.append(arg)
         i += 1
 
-    # Load config, creating a first-run project config when none exists.
+    if setup_requested:
+        config_file = (
+            Config.global_config_file()
+            if setup_scope == "global"
+            else Config.default_config_file()
+        )
+        preserve_template = not config_file.exists()
+        config_file = setup_config(config_file)
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            guide_config(config_file, preserve_template=preserve_template)
+        return
+
+    # Load config, creating first-run config when none exists.
     interactive_setup = sys.stdin.isatty() and sys.stdout.isatty()
-    config = ensure_first_run_config(interactive_setup)
+    config = ensure_first_run_config(interactive_setup, config_override)
 
     # Check for API key
     if not config.provider.api_key:

@@ -292,6 +292,13 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         table.add_row("API key", "set" if provider.api_key else "missing")
         table.add_row("Timeout", f"{getattr(self.config, 'request_timeout', 120)}s")
         table.add_row("Tools", str(len(self.agent.tools.list_tools())))
+        skills = discover_skills(self.config.workspace)
+        if skills:
+            names = ", ".join(skill.name for skill in skills[:6])
+            suffix = "" if len(skills) <= 6 else ", ..."
+            table.add_row("Skills", f"{len(skills)} ({names}{suffix})")
+        else:
+            table.add_row("Skills", "0 (missing)")
         table.add_row("Permission mode", self.config.permissions.mode)
         table.add_row("Auto requests", str(self._pending_auto_request_count()))
         table.add_row(
