@@ -160,7 +160,42 @@ class Config:
 
         if config_file:
             with open(config_file, encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+                try:
+                    data = yaml.safe_load(f) or {}
+                except yaml.YAMLError as exc:
+                    # YAML parse errors are commonly caused by unescaped
+                    # backslashes in Windows paths inside double-quoted strings.
+                    # Give the user a clear, actionable error message.
+                    note = getattr(exc, "note", "")
+                    problem_mark = getattr(exc, "problem_mark", None)
+                    if problem_mark:
+                        loc = f"line {problem_mark.line + 1}, column {problem_mark.column + 1}"
+                    else:
+                        loc = "unknown location"
+                    msg = (
+                        f"\n{'=' * 60}\n"
+                        f"  YAML parse error in config file:\n"
+                        f"    {config_file}\n"
+                        f"  Location: {loc}\n"
+                    )
+                    if note:
+                        msg += f"  Detail: {note}\n"
+                    msg += (
+                        "\n"
+                        "  Common cause: Windows paths inside YAML double-quoted strings.\n"
+                        '  The backslash (\\) is a YAML escape character, so\n'
+                        '    C:\\Users\\...   is treated as an escape sequence.\n'
+                        "\n"
+                        "  How to fix:\n"
+                        "    1. Use single quotes for paths (backslashes are literal):\n"
+                        "       ida_path: 'C:\\IDA Pro\\idat.exe'\n"
+                        "    2. Or use forward slashes:\n"
+                        "       ida_path: C:/IDA Pro/idat.exe\n"
+                        "    3. Or escape every backslash with \\\\ in double quotes:\n"
+                        '       ida_path: "C:\\\\IDA Pro\\\\idat.exe"\n'
+                        f"{'=' * 60}\n"
+                    )
+                    raise yaml.YAMLError(msg) from exc
             cls._apply_yaml(cfg, data)
             cls._ensure_builtin_permissions(cfg)
 
