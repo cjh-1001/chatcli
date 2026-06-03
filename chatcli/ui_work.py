@@ -24,6 +24,7 @@ SMART_WORK_PANEL = """[bold green]SMART WORK[/]
 
 USER_CHOICE_MARKER = "USER CHOICE REQUIRED"
 PLAN_READY_MARKER = "PLAN READY"
+TASK_COMPLETE_MARKER = "TASK COMPLETE"
 
 
 ACTION_PATTERNS = [
@@ -247,8 +248,57 @@ class WorkCommandMixin:
         return WORK_PROMPT
     def _max_work_cycles(self):
         return max(1, int(getattr(self.config, "max_work_cycles", 20)))
-    def _is_work_complete(self, result: str) -> bool:
-        if "TASK COMPLETE" in (result or "").upper():
+    def _stringify_completion_fragment(self, value, parts: list[str], limit: int = 200000) -> None:
+        if sum(len(part) for part in parts) >= limit:
+            return
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for key in ("content", "tool_calls", "function", "arguments", "input", "text"):
+                if key in value:
+                    self._stringify_completion_fragment(value[key], parts, limit)
+        elif isinstance(value, list):
+            for item in value:
+                self._stringify_completion_fragment(item, parts, limit)
+
+    def _recent_assistant_tool_text(self, history_start: int | None) -> str:
+        if history_start is None:
+            return ""
+        parts: list[str] = []
+        for message in self.agent._history[history_start:]:
+            role = str(message.get("role", "")).lower() if isinstance(message, dict) else ""
+            if role == "user":
+                continue
+            self._stringify_completion_fragment(message, parts)
+        return "\n".join(parts)
+
+    def _looks_like_final_triage_report(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        if "ioc" not in lowered:
+            return False
+        hints = (
+            "文件哈希",
+            "sha-256",
+            "md5",
+            "关键字符串",
+            "网络 ioc",
+            "后续分析建议",
+            "结论",
+            "conclusion",
+            "recommendations",
+        )
+        return sum(1 for hint in hints if hint in lowered) >= 5
+
+    def _has_completion_signal(self, text: str) -> bool:
+        if TASK_COMPLETE_MARKER in (text or "").upper():
+            return True
+        return self._looks_like_final_triage_report(text or "")
+
+    def _is_work_complete(self, result: str, history_start: int | None = None) -> bool:
+        if self._has_completion_signal(result or ""):
+            mark_task_done(self.config.workspace)
+            return True
+        if self._has_completion_signal(self._recent_assistant_tool_text(history_start)):
             mark_task_done(self.config.workspace)
             return True
         status = get_task_status(self.config.workspace)
@@ -327,6 +377,7 @@ class WorkCommandMixin:
             ]
             if context_parts:
                 effective_prompt = effective_prompt.rstrip() + "\n\n" + "\n\n".join(context_parts)
+            history_start = len(self.agent._history)
             result = self.agent.run(effective_prompt)
             pending_compression_events = self.agent.pop_compression_events()
             self._process_auto_requests(expected_task_id=task_id)
@@ -347,7 +398,7 @@ class WorkCommandMixin:
                     f"{WORK_CONTINUE_PROMPT}"
                 )
                 continue
-            if self._is_work_complete(result):
+            if self._is_work_complete(result, history_start):
                 self._set_agent_task_scope("")
                 self.console.print(
                     f"[green]done[/] [dim]{self._format_work_progress()}[/]"
