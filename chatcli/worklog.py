@@ -12,6 +12,8 @@ each turn, so interrupting with Ctrl+C preserves all state.
 
 from pathlib import Path
 from datetime import datetime
+import html
+import re
 import uuid
 from typing import Optional
 
@@ -130,6 +132,219 @@ def touch_task(workspace: str) -> None:
     # Replace any existing **Last activity:** line
     content = re.sub(r"\*\*Last activity:\*\*.*", f"**Last activity:** {now}", content)
     tf.write_text(content, encoding="utf-8")
+
+
+def _inline_markdown(text: str) -> str:
+    escaped = html.escape(text)
+    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+    return escaped
+
+
+def _markdownish_to_html(text: str) -> str:
+    """Convert the CLI's markdown-like reports into a self-contained HTML body."""
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    paragraph: list[str] = []
+    in_list = False
+    in_code = False
+    code_lines: list[str] = []
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if paragraph:
+            out.append("<p>" + "<br>".join(_inline_markdown(x) for x in paragraph) + "</p>")
+            paragraph = []
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            if in_code:
+                out.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+                code_lines = []
+                in_code = False
+            else:
+                flush_paragraph()
+                close_list()
+                in_code = True
+            continue
+
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        if not stripped:
+            flush_paragraph()
+            close_list()
+            continue
+
+        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = min(6, len(heading.group(1)) + 1)
+            out.append(f"<h{level}>{_inline_markdown(heading.group(2))}</h{level}>")
+            continue
+
+        bullet = re.match(r"^[-*]\s+(.+)$", stripped)
+        if bullet:
+            flush_paragraph()
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append("<li>" + _inline_markdown(bullet.group(1)) + "</li>")
+            continue
+
+        close_list()
+        paragraph.append(stripped)
+
+    if in_code:
+        out.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+    flush_paragraph()
+    close_list()
+    return "\n".join(out)
+
+
+def export_html_report(workspace: str, task_id: str, title: str, content: str) -> Path:
+    """Persist a completed analysis report as a self-contained HTML file."""
+    report_dir = Path(workspace) / ".chatcli" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task_id or "").strip("-")
+    if not safe_task:
+        safe_task = datetime.now().strftime("%Y%m%d%H%M%S")
+    path = report_dir / f"malware-triage-{safe_task}.html"
+    if path.exists():
+        for idx in range(1, 100):
+            candidate = report_dir / f"malware-triage-{safe_task}-{idx}.html"
+            if not candidate.exists():
+                path = candidate
+                break
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    body = _markdownish_to_html((content or "").strip())
+    doc_title = html.escape(title or "恶意样本静态分析报告")
+    html_text = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{doc_title}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #667085;
+      --line: #d0d5dd;
+      --accent: #0f766e;
+      --code-bg: #f1f5f9;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      line-height: 1.65;
+    }}
+    header {{
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }}
+    .wrap {{
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 24px;
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.25;
+    }}
+    .meta {{
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    main {{
+      max-width: 1080px;
+      margin: 24px auto 48px;
+      padding: 0 24px;
+    }}
+    article {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 28px;
+    }}
+    h2, h3, h4 {{
+      margin: 26px 0 10px;
+      line-height: 1.35;
+    }}
+    h2 {{
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+      font-size: 22px;
+    }}
+    h3 {{ font-size: 18px; }}
+    p {{ margin: 10px 0; }}
+    ul {{ margin: 10px 0 14px 22px; padding: 0; }}
+    li {{ margin: 4px 0; }}
+    code {{
+      background: var(--code-bg);
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 0.94em;
+    }}
+    pre {{
+      overflow: auto;
+      background: var(--code-bg);
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 14px;
+    }}
+    pre code {{
+      border: 0;
+      padding: 0;
+      background: transparent;
+    }}
+    strong {{ color: #111827; }}
+    .tag {{
+      display: inline-block;
+      margin-top: 8px;
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 13px;
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>{doc_title}</h1>
+      <div class="meta">生成时间：{html.escape(generated)} · Task ID：{html.escape(task_id or "unknown")}</div>
+      <div class="tag">防御性静态分析报告</div>
+    </div>
+  </header>
+  <main>
+    <article>
+{body}
+    </article>
+  </main>
+</body>
+</html>
+"""
+    path.write_text(html_text, encoding="utf-8")
+    return path
 
 
 def record_scope_confirmation(workspace: str, confirmation: str) -> None:
@@ -438,4 +653,13 @@ sandbox planning is relevant.
 10. When complete, output a structured report with summary, identity, static
    capabilities, IOCs, config extraction status, detection drafts, sandbox
    observation plan, gaps, and say `TASK COMPLETE`.
+11. Final malware triage reports must be written in Simplified Chinese. Keep
+   technical terms such as SHA256, IOC, YARA, Sigma, C2, PE, ELF, API, and ATT&CK
+   in their standard form when that is clearer.
+12. Before saying `TASK COMPLETE`, save the final Chinese report as a standalone
+   HTML file under `.chatcli/reports/` using `write_file`. Use a filename like
+   `malware-triage-<task-id>.html`, include `<meta charset="utf-8">`, and make
+   the HTML self-contained so it can be opened directly in a browser. If tool
+   permission blocks the write, still output the Chinese report; chatcli will
+   export a fallback HTML report after completion.
 """

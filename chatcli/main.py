@@ -139,6 +139,8 @@ def _render_config(settings: dict[str, str] | None = None) -> str:
     model = settings.get("model", "claude-sonnet-4-6")
     api_key = settings.get("api_key", "")
     api_base = settings.get("api_base", "")
+    ida_path = settings.get("ida_path", "")
+    context_file = settings.get("context_file", ".chatcli/context.md")
 
     lines: list[str] = []
     for line in DEFAULT_CONFIG.splitlines():
@@ -155,6 +157,10 @@ def _render_config(settings: dict[str, str] | None = None) -> str:
             continue
         elif line.startswith("  # api_base:") and api_base:
             lines.append("  api_base: " + _yaml_string(api_base))
+        elif line.startswith("ida_path:"):
+            lines.append(f"ida_path: {_yaml_string(ida_path)}                 # optional path to idat64/idat/ida64/ida for ida_analyze")
+        elif line.startswith("context_file:"):
+            lines.append(f"context_file: {_yaml_string(context_file)}")
         else:
             lines.append(line)
     return "\n".join(lines) + "\n"

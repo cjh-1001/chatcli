@@ -12,7 +12,9 @@ from .worklog import (
     WORK_PROMPT,
     MALWARE_TRIAGE_PROMPT,
     SECURITY_AUDIT_PROMPT,
+    export_html_report,
     get_task_status,
+    log_milestone,
     mark_task_done,
     record_scope_confirmation,
     start_task,
@@ -272,16 +274,83 @@ class WorkCommandMixin:
             self._stringify_completion_fragment(message, parts)
         return "\n".join(parts)
 
+    def _assistant_text_from_message(self, message: dict) -> str:
+        if not isinstance(message, dict):
+            return ""
+        if str(message.get("role", "")).lower() != "assistant":
+            return ""
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(str(block.get("text", "")))
+            return "\n".join(part for part in parts if part)
+        return ""
+
+    def _recent_final_assistant_text(self, history_start: int | None) -> str:
+        if history_start is None:
+            return ""
+        for message in reversed(self.agent._history[history_start:]):
+            text = self._assistant_text_from_message(message)
+            if text and self._has_completion_signal(text):
+                return text
+        return ""
+
+    def _is_malware_task(self) -> bool:
+        status = get_task_status(self.config.workspace)
+        if not status:
+            return False
+        first_line = (status.get("content") or "").splitlines()[0:1]
+        return bool(first_line and first_line[0].lower().startswith("# task: malware triage:"))
+
+    def _completion_report_text(self, result: str, history_start: int | None) -> str:
+        if result and self._has_completion_signal(result):
+            return result
+        recent = self._recent_final_assistant_text(history_start)
+        if recent:
+            return recent
+        return result or ""
+
+    def _maybe_export_malware_report(self, result: str, history_start: int | None) -> None:
+        if not self._is_malware_task():
+            return
+        status = get_task_status(self.config.workspace) or {}
+        report = self._completion_report_text(result, history_start).strip()
+        if not report:
+            return
+        task_id = str(status.get("task_id") or "").strip()
+        try:
+            path = export_html_report(
+                self.config.workspace,
+                task_id,
+                "恶意样本静态分析报告",
+                report,
+            )
+            log_milestone(self.config.workspace, f"HTML report exported: {path}")
+            self.console.print(f"[green]report[/] [dim]{path}[/]")
+        except Exception as e:
+            self.console.print(f"[yellow]report export failed:[/] [dim]{e}[/]")
+
     def _looks_like_final_triage_report(self, text: str) -> bool:
         lowered = (text or "").lower()
         if "ioc" not in lowered:
             return False
         hints = (
+            "样本身份",
+            "静态能力",
+            "配置提取",
+            "检测规则",
+            "沙箱观察",
             "文件哈希",
+            "sha256",
             "sha-256",
             "md5",
             "关键字符串",
             "网络 ioc",
+            "主机 ioc",
             "后续分析建议",
             "结论",
             "conclusion",
@@ -399,6 +468,7 @@ class WorkCommandMixin:
                 )
                 continue
             if self._is_work_complete(result, history_start):
+                self._maybe_export_malware_report(result, history_start)
                 self._set_agent_task_scope("")
                 self.console.print(
                     f"[green]done[/] [dim]{self._format_work_progress()}[/]"
