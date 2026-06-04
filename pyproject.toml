@@ -14,8 +14,14 @@ dependencies = [
     "prompt-toolkit>=3.0.0",
     "pyyaml>=6.0",
     "httpx>=0.28.0",
-    "tiktoken>=0.7.0",
 ]
+
+[project.optional-dependencies]
+# tiktoken provides accurate token counting for context compression.
+# On platforms without pre-built wheels it needs a Rust toolchain to build.
+# Leave it out if you don't have Rust — chatcli falls back to a heuristic counter.
+all = ["tiktoken>=0.7.0"]
+tiktoken = ["tiktoken>=0.7.0"]
 
 [project.scripts]
 chatcli = "chatcli.main:main"

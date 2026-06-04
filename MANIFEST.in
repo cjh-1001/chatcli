@@ -1,0 +1,16 @@
+include README.md
+include requirements.txt
+include pyproject.toml
+
+# Skills data files
+recursive-include chatcli/skills *.md
+recursive-include chatcli/skills *.py
+
+# Template data files
+recursive-include chatcli/templates *.json
+
+# Exclude local state
+prune .chatcli
+prune .claude
+prune __pycache__
+prune target
