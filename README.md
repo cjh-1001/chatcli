@@ -22,6 +22,22 @@ pip install -e .
 
 chatcli 需要 Python 3.10 或更高版本。
 
+### 1.1 验证安装
+
+安装完成后，先确认 `chatcli` 命令可用：
+
+```powershell
+chatcli --version
+```
+
+如果提示 `'chatcli' 不是内部或外部命令`，说明 Python Scripts 目录不在 PATH 里。用下面这条命令代替，效果完全一样：
+
+```powershell
+python -m chatcli.main --version
+```
+
+> **Windows 常见问题**：安装 Python 时如果没有勾选 "Add Python to PATH"，或者 pip 安装的 Scripts 目录没有被加入 PATH，就会找不到 `chatcli` 命令。最简单的办法是一直用 `python -m chatcli.main` 代替 `chatcli`。也可以参考[安装排错](#安装排错)彻底修复 PATH。
+
 ### 2. 初始化配置
 
 推荐先创建全局配置，这样像 Claude 一样在任意目录直接运行 `chatcli` 都能用同一套 provider/API key 设置：
@@ -126,6 +142,8 @@ export CHATCLI_API_KEY="你的 API Key"
 
 ## 常用命令
 
+> 如果 `chatcli` 命令找不到，把 `chatcli` 替换为 `python -m chatcli.main` 即可。
+
 交互模式：
 
 ```powershell
@@ -168,6 +186,56 @@ chatcli --help
 chatcli --version
 ```
 
+## 安装排错
+
+### Windows: `chatcli` 命令找不到
+
+```powershell
+'chatcli' 不是内部或外部命令，也不是可运行的程序
+```
+
+**原因**：Python Scripts 目录（如 `C:\Program Files\Python310\Scripts\`）不在系统 PATH 中。
+
+**解决方式一**：用 `python -m chatcli.main` 代替（推荐）
+
+```powershell
+# 把 chatcli 替换为 python -m chatcli.main，效果完全一样
+python -m chatcli.main
+python -m chatcli.main --setup --global
+python -m chatcli.main "你的问题"
+```
+
+**解决方式二**：把 Scripts 加入 PATH 后重开终端
+
+```powershell
+# 找到 Scripts 目录
+python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+
+# 输出类似：C:\Program Files\Python310\Scripts
+# 把输出路径加入 PATH：
+setx PATH "%PATH%;C:\Program Files\Python310\Scripts"
+```
+
+### Windows: 安装时 `tiktoken` 编译失败
+
+**原因**：`tiktoken` 需要 Rust toolchain 才能编译。现在 `tiktoken` 已经是可选依赖，不会阻塞安装。如果报错，用下面命令跳过：
+
+```powershell
+pip install git+https://github.com/cjh-1001/chatcli.git --no-deps
+pip install anthropic openai rich prompt-toolkit pyyaml httpx
+```
+
+> 没有 `tiktoken` 时 chatcli 会用字符启发式算法估算 token 数，不影响正常使用。
+
+### 常见问题速查
+
+| 症状 | 解决 |
+|------|------|
+| `chatcli` 命令找不到 | `python -m chatcli.main` |
+| `No API key found` | 设置 `CHATCLI_API_KEY` 环境变量或运行 `chatcli --setup` |
+| `Python 3.10+ required` | 升级 Python 到 3.10 或更高版本 |
+| 安装后 import 报错 | 确认 `pip install -e .` 运行在项目根目录 |
+
 ## 配置示例
 
 `.chatcli/config.yaml` 示例：
@@ -179,7 +247,7 @@ provider:
   api_base: ""
   max_tokens: 8192
   thinking: true
-  thinking_budget: 16000
+  thinking_budget: 4096
 
 permissions:
   auto:
