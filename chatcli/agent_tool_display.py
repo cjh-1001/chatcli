@@ -237,27 +237,27 @@ class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
                         if rendered >= limit:
                             truncated = True
                             break
-                        print_line("delete", "-", i1 + offset + 1, None, line)
+                        print_line("delete", "-", i1 + offset + 1, j1 + 1, line)
                         rendered += 1
                 elif tag == "insert":
                     for offset, line in enumerate(new_lines[j1:j2]):
                         if rendered >= limit:
                             truncated = True
                             break
-                        print_line("add", "+", None, j1 + offset + 1, line)
+                        print_line("add", "+", i1 + 1, j1 + offset + 1, line)
                         rendered += 1
                 elif tag == "replace":
                     for offset, line in enumerate(old_lines[i1:i2]):
                         if rendered >= limit:
                             truncated = True
                             break
-                        print_line("delete", "-", i1 + offset + 1, None, line)
+                        print_line("delete", "-", i1 + offset + 1, j1 + 1, line)
                         rendered += 1
                     for offset, line in enumerate(new_lines[j1:j2]):
                         if rendered >= limit:
                             truncated = True
                             break
-                        print_line("add", "+", None, j1 + offset + 1, line)
+                        print_line("add", "+", i1 + 1, j1 + offset + 1, line)
                         rendered += 1
                 if truncated:
                     break

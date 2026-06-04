@@ -1,0 +1,95 @@
+{
+  "title": "Malware Analysis Report: suspicious.exe",
+  "meta": {
+    "date": "2026-06-04",
+    "author": "chatcli",
+    "tags": ["malware", "trojan", "windows"],
+    "target": {
+      "name": "suspicious.exe",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": "245,760 bytes"
+    }
+  },
+  "summary": "## Executive Summary\n\nThis report documents analysis of `suspicious.exe`, a Windows PE executable that exhibits **trojan-like behavior**. The sample establishes persistence via registry Run keys, communicates with a C2 server at `192.168.1.100:4444`, and attempts to disable Windows Defender.\n\n**Overall risk: HIGH**",
+  "sections": [
+    {
+      "title": "Static Analysis",
+      "type": "text",
+      "intro": "Basic file properties and PE structure overview.",
+      "content": "### PE Header\n\n- **Machine:** x86-64\n- **Subsystem:** Windows GUI\n- **Entry Point:** 0x140001000\n- **Sections:** .text, .rdata, .data, .rsrc\n- **Compile Timestamp:** 2026-05-15\n\n### Imports\n\nThe binary imports functions from:\n\n- `kernel32.dll` — VirtualAlloc, WriteProcessMemory, CreateRemoteThread\n- `advapi32.dll` — RegSetValueExW, RegCreateKeyExW\n- `wininet.dll` — InternetOpenA, InternetConnectA\n- `shell32.dll` — ShellExecuteW\n\nThe combination of `VirtualAlloc` + `WriteProcessMemory` + `CreateRemoteThread` is a classic **process injection** pattern."
+    },
+    {
+      "title": "Findings",
+      "type": "findings",
+      "content": [
+        {
+          "severity": "critical",
+          "title": "Process Injection Capability",
+          "location": "sub_140001200",
+          "description": "The binary allocates memory in a target process (`VirtualAlloc`), writes shellcode, and creates a remote thread to execute it. **This is a definitive indicator of code injection.**",
+          "code": "VirtualAlloc(hProcess, NULL, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);\nWriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, dwSize, NULL);\nCreateRemoteThread(hProcess, NULL, 0, lpStartAddress, NULL, 0, NULL);",
+          "remediation": "Block `CreateRemoteThread` calls from non-whitelisted processes via EDR policy. Monitor for `VirtualAlloc` with `PAGE_EXECUTE_READWRITE` permissions."
+        },
+        {
+          "severity": "high",
+          "title": "Registry Persistence",
+          "location": "sub_140001800",
+          "description": "Creates a Run key to ensure execution on every system boot.",
+          "code": "RegCreateKeyExW(HKEY_CURRENT_USER, \"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\", ...)\nRegSetValueExW(hKey, L\"SecurityHealth\", ...)",
+          "remediation": "Monitor registry Run key modifications. Use AppLocker or WDAC to restrict unauthorized executables."
+        },
+        {
+          "severity": "medium",
+          "title": "Suspicious String Obfuscation",
+          "location": ".rdata section",
+          "description": "Multiple XOR-encoded strings found. The decoding routine at `sub_140001500` uses a single-byte XOR key (0x55).",
+          "code": "Key: 0x55\nDecoded: \"C:\\\\Users\\\\Public\\\\svchost.exe\"\nDecoded: \"192.168.1.100:4444\"\nDecoded: \"cmd.exe /c sc stop WinDefend\"",
+          "remediation": "Use static string deobfuscation tools to detect XOR-encoded indicators."
+        }
+      ]
+    },
+    {
+      "title": "Network Indicators",
+      "type": "table",
+      "content": {
+        "headers": ["Type", "Value", "Context"],
+        "rows": [
+          ["C2 IP", "192.168.1.100", "Hardcoded, XOR-obfuscated"],
+          ["C2 Port", "4444/TCP", "Reverse shell connection"],
+          ["User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Used in HTTP requests"],
+          ["URI Pattern", "/api/beacon.php?id=%s", "C2 check-in endpoint"]
+        ],
+        "caption": "Extracted network indicators"
+      }
+    },
+    {
+      "title": "Execution Timeline",
+      "type": "timeline",
+      "content": [
+        {"time": "T+0ms", "event": "Entry point — checks for debugger via `IsDebuggerPresent()`"},
+        {"time": "T+15ms", "event": "Anti-VM check — queries `HKLM\\HARDWARE\\DESCRIPTION\\System\\BIOS` for VMware/VirtualBox strings"},
+        {"time": "T+50ms", "event": "Deobfuscates XOR-encoded strings in `.rdata`"},
+        {"time": "T+120ms", "event": "Drops copy to `C:\\Users\\Public\\svchost.exe`"},
+        {"time": "T+200ms", "event": "Creates persistence via Run key"},
+        {"time": "T+350ms", "event": "Attempts to disable Windows Defender via `sc stop WinDefend`"},
+        {"time": "T+500ms", "event": "Connects to C2 at `192.168.1.100:4444`"},
+        {"time": "T+800ms", "event": "Awaits C2 commands in loop"}
+      ]
+    },
+    {
+      "title": "Disassembly Comparison",
+      "type": "comparison",
+      "content": {
+        "left": {
+          "title": "Original (obfuscated)",
+          "body": "```asm\nmov     rax, 0x1122334455667788\nxor     rax, 0x5544332211000000\ncall    rax\n```"
+        },
+        "right": {
+          "title": "Deobfuscated",
+          "body": "```asm\n; Computed: 0x1122334455667788\n; XOR key: 0x5544332211000000\n; Result:  0x4466001166667788\n; → VirtualAlloc\ncall    VirtualAlloc\n```"
+        }
+      }
+    }
+  ],
+  "appendix": "## Detection Rules\n\n### YARA\n```yara\nrule Trojan_Generic_ProcessInjection {\n    strings:\n        $a1 = \"VirtualAlloc\"\n        $a2 = \"CreateRemoteThread\"\n        $a3 = { 48 33 ?? ?? ?? ?? ?? 48 31 }\n    condition:\n        2 of them\n}\n```\n\n### Sigma\n```yaml\ntitle: Suspicious Registry Run Key Modification\ndetection:\n    selection:\n        EventID: 13\n        TargetObject|contains: '\\\\CurrentVersion\\\\Run'\n    condition: selection\n```"
+}

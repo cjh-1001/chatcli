@@ -20,7 +20,8 @@ class AgentToolPreviewMixin:
                 "runtime_string_hooks",
             )
         if name in ("write_file", "edit_file", "multi_edit"):
-            return False
+            if not result.is_error:
+                return False
         text = result.content.strip()
         if not text or text == "(no output)":
             return False
