@@ -29,7 +29,7 @@ provider:
   # api_base: https://...    # For custom endpoints (Ollama, vLLM, etc.)
   max_tokens: 8192
   thinking: true
-  thinking_budget: 16000
+  thinking_budget: 4096
 
 permissions:
   auto:                      # Auto-execute these tools
@@ -80,7 +80,7 @@ max_diff_lines: 80           # truncate displayed diffs after this many lines
 tool_preview_lines: 0        # 0 keeps terminal output compact; errors still show a short preview
 tool_preview_chars: 800      # max chars to echo when previews are enabled
 search_backend: auto        # auto | bing | duckduckgo
-ida_path: ""                 # optional path to idat64/idat/ida64/ida for ida_analyze
+ida_path: ""                 # path to idat64/idat (headless IDA); avoid pointing to ida gui
 auto_resume: false           # auto-restore last session + continue work on startup
 auto_compress: true          # auto-compress context when it gets too long
 compress_threshold: 80000    # tokens - trigger compression above this
@@ -158,7 +158,7 @@ def _render_config(settings: dict[str, str] | None = None) -> str:
         elif line.startswith("  # api_base:") and api_base:
             lines.append("  api_base: " + _yaml_string(api_base))
         elif line.startswith("ida_path:"):
-            lines.append(f"ida_path: {_yaml_string(ida_path)}                 # optional path to idat64/idat/ida64/ida for ida_analyze")
+            lines.append(f"ida_path: {_yaml_string(ida_path)}                 # path to idat64/idat (headless IDA); avoid pointing to ida gui")
         elif line.startswith("context_file:"):
             lines.append(f"context_file: {_yaml_string(context_file)}")
         else:

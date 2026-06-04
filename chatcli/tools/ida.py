@@ -99,7 +99,7 @@ def _ida_not_found_message() -> str:
     return (
         "IDA executable not found. Install IDA Pro/Free and configure one of: "
         "IDA_PATH, IDAT64_PATH, IDAT_PATH, IDA64_PATH, PATH, or pass ida_path. "
-        "ida_path may point to idat64/idat/ida64/ida or to an IDA install directory. "
+        "ida_path may point to idat64/idat (headless CLI) or to an IDA install directory. "
         "Run ida_probe for diagnostics. Continue without IDA using binary_inspect, "
         "encoded_string_extract, obfuscated_data_map, binary_find, and binary_hexdump."
     )
