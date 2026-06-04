@@ -102,7 +102,12 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
                 r = self._handle_command(ui)
                 if r == "EXIT": break
                 if r is not None: continue
-                self._handle_smart_input(ui)
+                try:
+                    self._handle_smart_input(ui)
+                except Exception as e:
+                    self.console.print(
+                        f"[red]Error: {type(e).__name__}: {e}[/]"
+                    )
         finally:
             mark_clean(self.config.workspace)
     def _handle_command(self, ui):

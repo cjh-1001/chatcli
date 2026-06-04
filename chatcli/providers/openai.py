@@ -3,6 +3,7 @@
 import json
 from collections.abc import Callable
 
+import httpx
 from openai import OpenAI
 from .base import BaseProvider, LLMResponse
 
@@ -12,11 +13,22 @@ class OpenAIProvider(BaseProvider):
 
     def __init__(self, config):
         self.config = config
+        # Use a httpx.Timeout with a generous read timeout so streaming
+        # responses aren't killed when the model pauses between chunks.
+        # The SDK's own max_retries is set to 0 — our agent-level
+        # _retry_chat handles retries with backoff instead.
+        timeout = httpx.Timeout(
+            config.request_timeout,          # overall default
+            connect=30.0,                     # TCP/TLS handshake
+            read=max(config.request_timeout, 600.0),   # wait between stream chunks
+            write=60.0,                       # upload request body
+            pool=30.0,                        # wait for connection from pool
+        )
         self.client = OpenAI(
             api_key=config.provider.api_key or "sk-placeholder",
             base_url=config.provider.api_base or None,
-            timeout=config.request_timeout,
-            max_retries=config.max_retries,
+            timeout=timeout,
+            max_retries=0,  # agent._retry_chat handles retries
         )
 
     def chat(self, messages: list[dict], tools: list[dict], stream: bool = True,
@@ -41,8 +53,9 @@ class OpenAIProvider(BaseProvider):
             "model": self.config.provider.model,
             "max_tokens": self.config.provider.max_tokens,
             "messages": messages,
-            "tools": openai_tools,
         }
+        if openai_tools:
+            kwargs["tools"] = openai_tools
 
         if stream:
             return self._stream_response(kwargs, on_text)

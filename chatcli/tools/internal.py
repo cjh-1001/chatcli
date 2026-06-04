@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_bool
 
 
 class ChatcliAutoRequestTool(Tool):
@@ -75,7 +75,7 @@ class ChatcliAutoRequestTool(Tool):
             "task": task,
             "skill_name": skill_name,
             "note": note,
-            "apply": bool(apply),
+            "apply": coerce_bool(apply, False),
             "reason": reason,
             "task_id": _chatcli_task_id,
             "source_role": _chatcli_agent_role,

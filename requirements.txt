@@ -1,6 +1,7 @@
 # Core dependencies for chatcli
 # Install: pip install -r requirements.txt
 # For accurate token counting (optional, needs Rust toolchain): pip install tiktoken>=0.7.0
+# Optional reverse-analysis Python deps: pip install -r requirements-reverse.txt
 anthropic>=0.40.0
 openai>=1.60.0
 rich>=13.0.0

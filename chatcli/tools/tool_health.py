@@ -5,9 +5,11 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_bool, coerce_str_list
 from .ida import _find_ida
+from .ghidra import _find_ghidra
 
 
 BUILT_IN_TOOLS = {
@@ -52,6 +54,9 @@ TOOL_DEPENDENCIES = {
     "ida_analyze": ["ida"],
     "ida_focus_decompile": ["ida"],
     "ida_deobfuscate": ["ida"],
+    "ghidra_probe": ["ghidra"],
+    "ghidra_analyze": ["ghidra"],
+    "angr_triage": ["angr"],
     "external_static_analyze": ["capa", "die", "floss", "exiftool"],
     "yara_scan": ["yara"],
     "upx_unpack": ["upx"],
@@ -85,9 +90,26 @@ def _version(exe: str, timeout: float = 3.0) -> str:
     return ""
 
 
-def _probe_external(name: str, include_versions: bool) -> dict[str, object]:
+def _probe_external(name: str, include_versions: bool, config=None) -> dict[str, object]:
     if name == "ida":
-        path = _find_ida()
+        path = _find_ida(getattr(config, "ida_path", "") if config else "")
+    elif name == "ghidra":
+        path = _find_ghidra(getattr(config, "ghidra_path", "") if config else "")
+    elif name == "angr":
+        try:
+            import angr  # noqa: F401
+            path = "python package: angr"
+        except Exception:
+            path = None
+    elif name == "die":
+        configured = getattr(config, "die_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "exiftool":
+        configured = getattr(config, "exiftool_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "upx":
+        configured = getattr(config, "upx_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
     else:
         path = _which_any(EXECUTABLE_PROBES.get(name, [name]))
     row: dict[str, object] = {
@@ -96,12 +118,12 @@ def _probe_external(name: str, include_versions: bool) -> dict[str, object]:
         "available": bool(path),
         "path": path or "",
     }
-    if include_versions and path:
+    if include_versions and path and not str(path).startswith("python package:"):
         row["version"] = _version(path)
     return row
 
 
-def _probe_tool(name: str, include_versions: bool) -> dict[str, object]:
+def _probe_tool(name: str, include_versions: bool, config=None) -> dict[str, object]:
     if name in BUILT_IN_TOOLS:
         return {
             "name": name,
@@ -110,7 +132,7 @@ def _probe_tool(name: str, include_versions: bool) -> dict[str, object]:
             "path": "chatcli",
         }
     if name in TOOL_DEPENDENCIES:
-        deps = [_probe_external(dep, include_versions) for dep in TOOL_DEPENDENCIES[name]]
+        deps = [_probe_external(dep, include_versions, config) for dep in TOOL_DEPENDENCIES[name]]
         available = any(dep["available"] for dep in deps) if name == "external_static_analyze" else all(dep["available"] for dep in deps)
         return {
             "name": name,
@@ -118,8 +140,8 @@ def _probe_tool(name: str, include_versions: bool) -> dict[str, object]:
             "available": available,
             "dependencies": deps,
         }
-    if name in EXECUTABLE_PROBES or name == "ida":
-        return _probe_external(name, include_versions)
+    if name in EXECUTABLE_PROBES or name in {"ida", "ghidra", "angr"}:
+        return _probe_external(name, include_versions, config)
     return {
         "name": name,
         "kind": "unknown",
@@ -142,7 +164,8 @@ class ToolHealthCheckTool(Tool):
                 "type": "array",
                 "description": (
                     "Optional names to check. Examples: ida, ida_analyze, binary_hexdump, "
-                    "external_static_analyze, yara_scan, upx_unpack, git, python, ilspycmd. "
+                    "external_static_analyze, ghidra_analyze, angr_triage, yara_scan, "
+                    "upx_unpack, git, python, ilspycmd. "
                     "Default checks common reverse-analysis dependencies."
                 ),
                 "items": {"type": "string"},
@@ -154,8 +177,12 @@ class ToolHealthCheckTool(Tool):
         },
     }
 
+    def __init__(self, config=None):
+        self.config = config
+
     def execute(self, tools: list[str] | None = None, include_versions: bool = False, **kwargs) -> ToolResult:
-        requested = tools or [
+        include_versions = coerce_bool(include_versions, False)
+        requested = coerce_str_list(tools) or [
             "python",
             "py",
             "powershell",
@@ -167,12 +194,16 @@ class ToolHealthCheckTool(Tool):
             "encoded_string_extract",
             "obfuscated_data_map",
             "external_static_analyze",
+            "ghidra",
+            "ghidra_analyze",
+            "angr",
+            "angr_triage",
             "yara_scan",
             "upx_unpack",
             "dotnet",
             "ilspycmd",
         ]
-        rows = [_probe_tool(str(name).strip(), bool(include_versions)) for name in requested if str(name).strip()]
+        rows = [_probe_tool(str(name).strip(), include_versions, self.config) for name in requested if str(name).strip()]
 
         lines = ["# Tool Health Check", ""]
         available_count = sum(1 for row in rows if row.get("available"))

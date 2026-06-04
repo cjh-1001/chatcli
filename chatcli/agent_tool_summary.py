@@ -111,6 +111,24 @@ class AgentToolSummaryMixin:
                 parts.append(f"{meta['pseudocode']} pseudocode")
             if meta.get("patched_database"):
                 parts.append("patched-idb")
+        elif name in ("ida_mcp_ensure", "ida_mcp_probe", "ida_mcp_list_tools"):
+            if "ready" in meta:
+                parts.append("ready" if meta["ready"] else "not-ready")
+            if meta.get("started"):
+                parts.append("started")
+            if meta.get("pid"):
+                parts.append(f"pid={meta['pid']}")
+            if "tools" in meta:
+                parts.append(f"{meta['tools']} tools")
+            if meta.get("url"):
+                parts.append(str(meta["url"]))
+        elif name == "ida_mcp_call":
+            if meta.get("tool_name"):
+                parts.append(str(meta["tool_name"]))
+            if "chars" in meta:
+                parts.append(f"{meta['chars']} chars")
+            if meta.get("is_mcp_error"):
+                parts.append("mcp-error")
         elif name == "encoded_string_extract":
             if "plain_strings" in meta:
                 parts.append(f"{meta['plain_strings']} plain")
@@ -159,6 +177,29 @@ class AgentToolSummaryMixin:
                 parts.append(f"{meta['ran']} analyzers")
             if meta.get("missing"):
                 parts.append(f"missing={','.join(meta['missing'])}")
+        elif name == "ghidra_probe":
+            parts.append("found" if meta.get("found") else "not found")
+            if meta.get("ghidra_path"):
+                parts.append(str(meta["ghidra_path"]))
+        elif name == "ghidra_analyze":
+            if "candidate_functions" in meta:
+                parts.append(f"{meta['candidate_functions']} candidates")
+            if "functions" in meta:
+                parts.append(f"{meta['functions']} funcs")
+            if "imports" in meta:
+                parts.append(f"{meta['imports']} imports")
+            if "strings" in meta:
+                parts.append(f"{meta['strings']} strings")
+            if "pseudocode" in meta:
+                parts.append(f"{meta['pseudocode']} pseudocode")
+        elif name == "angr_triage":
+            parts.append("available" if meta.get("available") else "missing")
+            if "imports" in meta:
+                parts.append(f"{meta['imports']} imports")
+            if "strings" in meta:
+                parts.append(f"{meta['strings']} strings")
+            if "functions" in meta:
+                parts.append(f"{meta['functions']} funcs")
         elif name == "yara_scan":
             if "exit_code" in meta:
                 parts.append(f"exit={meta['exit_code']}")

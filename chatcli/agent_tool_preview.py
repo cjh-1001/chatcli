@@ -13,6 +13,12 @@ class AgentToolPreviewMixin:
                 "ida_analyze",
                 "ida_focus_decompile",
                 "ida_deobfuscate",
+                "ida_mcp_ensure",
+                "ida_mcp_probe",
+                "ida_mcp_list_tools",
+                "ida_mcp_call",
+                "ghidra_analyze",
+                "angr_triage",
                 "encoded_string_extract",
                 "obfuscated_data_map",
                 "reverse_technique_map",
@@ -169,6 +175,7 @@ class AgentToolPreviewMixin:
                 "x64dbg script:", "Module:", "Decrypt offset:",
                 "API hooks:", "Argument indexes:", "Goal:", "Signals:",
                 "Keywords:", "Input:", "Output JSON:", "Targets:", "Errors:",
+                "URL:", "Tool:", "Tools:", "Server:",
             ))
         ]
         selected.extend(self._compact_markdown_sections(
@@ -223,6 +230,12 @@ class AgentToolPreviewMixin:
             "reverse_technique_map",
             "reverse_evidence_map",
             "runtime_string_hooks",
+            "ida_mcp_ensure",
+            "ida_mcp_probe",
+            "ida_mcp_list_tools",
+            "ida_mcp_call",
+            "ghidra_analyze",
+            "angr_triage",
         ):
             shown = self._preview_reverse_markdown(text, max_lines)
             return "key output", shown, truncated or len(all_lines) > len(shown)
@@ -243,6 +256,12 @@ class AgentToolPreviewMixin:
             "ida_analyze",
             "ida_focus_decompile",
             "ida_deobfuscate",
+            "ida_mcp_ensure",
+            "ida_mcp_probe",
+            "ida_mcp_list_tools",
+            "ida_mcp_call",
+            "ghidra_analyze",
+            "angr_triage",
             "encoded_string_extract",
             "obfuscated_data_map",
             "reverse_technique_map",

@@ -3,7 +3,7 @@
 import fnmatch
 import re
 from pathlib import Path
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_bool, coerce_int
 
 
 class GrepTool(Tool):
@@ -94,13 +94,12 @@ class GrepTool(Tool):
         i: bool = False, n: bool = True, **kwargs
     ) -> ToolResult:
         if "-i" in kwargs:
-            i = bool(kwargs.get("-i"))
+            i = coerce_bool(kwargs.get("-i"), i)
         if "-n" in kwargs:
-            n = bool(kwargs.get("-n"))
+            n = coerce_bool(kwargs.get("-n"), n)
         if not pattern or not pattern.strip():
             return ToolResult(content="Error: pattern cannot be empty.", is_error=True)
-        if head_limit < 1:
-            return ToolResult(content="Error: head_limit must be >= 1.", is_error=True)
+        head_limit = coerce_int(head_limit, 250, minimum=1, maximum=10000)
         workspace = kwargs.get("workspace", ".")
         base = Path(path) if path else Path(workspace)
 

@@ -1,10 +1,12 @@
 """Optional external static-analysis tool integrations."""
 
+import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_bool, coerce_int, coerce_str_list
 
 
 SUPPORTED_ANALYZERS = {
@@ -29,6 +31,93 @@ SUPPORTED_ANALYZERS = {
         "description": "ExifTool metadata extraction",
     },
 }
+
+INTERESTING_STATIC_RE = re.compile(
+    r"(anti|debug|vm|sandbox|inject|process|thread|service|registry|socket|http|"
+    r"https|dns|connect|crypto|encrypt|decrypt|base64|xor|persistence|mutex|"
+    r"credential|keylog|screenshot|clipboard|ransom|packer|upx|themida|vmprotect)",
+    re.I,
+)
+
+
+def _short_line(text: str, limit: int = 180) -> str:
+    text = str(text or "").replace("\r", " ").replace("\n", " ").strip()
+    return text[:limit]
+
+
+def _json_or_none(text: str):
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _walk_json_strings(value, limit: int = 300) -> list[str]:
+    out: list[str] = []
+
+    def walk(item):
+        if len(out) >= limit:
+            return
+        if isinstance(item, dict):
+            for key, val in item.items():
+                if isinstance(val, str) and key.lower() in {
+                    "name", "rule", "namespace", "description", "scope", "capability",
+                    "technique", "tactic", "value", "string",
+                }:
+                    out.append(val)
+                walk(val)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+        elif isinstance(item, str) and INTERESTING_STATIC_RE.search(item):
+            out.append(item)
+
+    walk(value)
+    seen = set()
+    deduped = []
+    for item in out:
+        line = _short_line(item)
+        if line and line not in seen:
+            seen.add(line)
+            deduped.append(line)
+    return deduped[:limit]
+
+
+def _summarize_external_output(name: str, output: str) -> list[str]:
+    parsed = _json_or_none(output)
+    evidence: list[str] = []
+    if parsed is not None:
+        evidence.extend(_walk_json_strings(parsed, 120))
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if name == "die" and any(key in lowered for key in ("packer", "compiler", "linker", "protector", "entropy")):
+            evidence.append(line)
+        elif name == "floss" and INTERESTING_STATIC_RE.search(line):
+            evidence.append(line)
+        elif name == "capa" and (
+            INTERESTING_STATIC_RE.search(line)
+            or line.startswith(("namespace", "ATT&CK", "MBC", "rule"))
+        ):
+            evidence.append(line)
+        elif name == "exiftool" and any(key in lowered for key in ("file type", "machine", "subsystem", "linker", "timestamp")):
+            evidence.append(line)
+
+    seen = set()
+    compact = []
+    for item in evidence:
+        line = _short_line(item)
+        if line and line not in seen:
+            seen.add(line)
+            compact.append(line)
+        if len(compact) >= 40:
+            break
+
+    if not compact:
+        return [f"- {name}: no high-signal lines extracted; inspect raw output below."]
+    return [f"- {line}" for line in compact]
 
 
 class ExternalStaticAnalyzeTool(Tool):
@@ -57,6 +146,19 @@ class ExternalStaticAnalyzeTool(Tool):
         "required": ["file_path"],
     }
 
+    def __init__(self, config=None):
+        self.config = config
+
+    def _resolve_analyzer(self, name: str, spec: dict) -> str | None:
+        configured = ""
+        if name == "die" and self.config is not None:
+            configured = getattr(self.config, "die_path", "") or ""
+        elif name == "exiftool" and self.config is not None:
+            configured = getattr(self.config, "exiftool_path", "") or ""
+        if configured and Path(configured).exists():
+            return str(Path(configured))
+        return shutil.which(spec["exe"])
+
     def execute(
         self, file_path: str, analyzers: list[str] | None = None,
         timeout: int = 180000, **kwargs
@@ -67,18 +169,18 @@ class ExternalStaticAnalyzeTool(Tool):
         if target.is_dir():
             return ToolResult(content=f"Path is a directory, not a file: {file_path}", is_error=True)
 
-        requested = [a.lower() for a in analyzers] if analyzers else list(SUPPORTED_ANALYZERS)
+        requested = [a.lower() for a in coerce_str_list(analyzers)] if analyzers else list(SUPPORTED_ANALYZERS)
         unknown = [a for a in requested if a not in SUPPORTED_ANALYZERS]
         if unknown:
             return ToolResult(content=f"Unknown analyzers: {', '.join(unknown)}", is_error=True)
 
-        timeout_sec = min(max(int(timeout), 10000), 900000) / 1000
+        timeout_sec = coerce_int(timeout, 180000, minimum=10000, maximum=900000) / 1000
         results = []
         ran = 0
         missing = []
         for name in requested:
             spec = SUPPORTED_ANALYZERS[name]
-            exe = shutil.which(spec["exe"])
+            exe = self._resolve_analyzer(name, spec)
             if not exe:
                 missing.append(name)
                 continue
@@ -105,10 +207,14 @@ class ExternalStaticAnalyzeTool(Tool):
                 output = "(no output)"
             if len(output) > 50000:
                 output = output[:50000] + "\n... (truncated)"
+            evidence = _summarize_external_output(name, output)
             results.append(
                 f"## {name}\n"
                 f"{spec['description']}\n"
                 f"Exit code: {proc.returncode}\n\n"
+                f"### AI Evidence Summary\n"
+                + "\n".join(evidence)
+                + "\n\n### Raw Output\n"
                 f"{output}"
             )
 
@@ -182,7 +288,8 @@ class YaraScanTool(Tool):
         if recursive:
             cmd.append("-r")
         cmd.extend([str(rules), str(target)])
-        timeout_sec = min(max(int(timeout), 10000), 600000) / 1000
+        recursive = coerce_bool(recursive, True)
+        timeout_sec = coerce_int(timeout, 120000, minimum=10000, maximum=600000) / 1000
         try:
             proc = subprocess.run(
                 cmd,
@@ -240,6 +347,9 @@ class UpxUnpackTool(Tool):
         "required": ["file_path"],
     }
 
+    def __init__(self, config=None):
+        self.config = config
+
     def execute(
         self, file_path: str, output_path: str | None = None,
         upx_path: str | None = None, overwrite: bool = False,
@@ -251,7 +361,9 @@ class UpxUnpackTool(Tool):
         if target.is_dir():
             return ToolResult(content=f"Path is a directory, not a file: {file_path}", is_error=True)
 
-        upx = upx_path if upx_path and Path(upx_path).exists() else shutil.which(upx_path or "upx")
+        configured = getattr(self.config, "upx_path", "") if self.config is not None else ""
+        selected = upx_path or configured or "upx"
+        upx = selected if selected and Path(selected).exists() else shutil.which(selected)
         if not upx:
             return ToolResult(
                 content="upx executable not found. Install UPX or pass upx_path.",
@@ -259,6 +371,7 @@ class UpxUnpackTool(Tool):
             )
 
         out = Path(output_path) if output_path else target.with_name(f"{target.stem}.unpacked{target.suffix}")
+        overwrite = coerce_bool(overwrite, False)
         if out.exists() and not overwrite:
             return ToolResult(
                 content=f"Output already exists: {out}. Pass overwrite=true or choose output_path.",
@@ -269,7 +382,7 @@ class UpxUnpackTool(Tool):
         cmd = [str(upx), "-d", "-o", str(out), str(target)]
         if overwrite:
             cmd.insert(2, "-f")
-        timeout_sec = min(max(int(timeout), 10000), 600000) / 1000
+        timeout_sec = coerce_int(timeout, 120000, minimum=10000, maximum=600000) / 1000
         try:
             proc = subprocess.run(
                 cmd,

@@ -433,6 +433,7 @@ class WorkCommandMixin:
         pending_compression_events: list[dict] = []
         task_id = self._current_task_id()
         self._set_agent_task_scope(task_id)
+        loop_error = None
         for cycle in range(1, max_cycles + 1):
             self._print_work_cycle_header(cycle, max_cycles)
             effective_prompt = prompt
@@ -447,7 +448,17 @@ class WorkCommandMixin:
             if context_parts:
                 effective_prompt = effective_prompt.rstrip() + "\n\n" + "\n\n".join(context_parts)
             history_start = len(self.agent._history)
-            result = self.agent.run(effective_prompt)
+            try:
+                result = self.agent.run(effective_prompt)
+            except Exception as e:
+                import traceback
+                self.console.print(
+                    f"[red]Work loop error (cycle {cycle}/{max_cycles}):[/] "
+                    f"{type(e).__name__}: {e}"
+                )
+                self.console.print(f"[dim]{traceback.format_exc()}[/]")
+                loop_error = e
+                break
             pending_compression_events = self.agent.pop_compression_events()
             self._process_auto_requests(expected_task_id=task_id)
             if self._needs_plan_confirmation(result):
@@ -503,7 +514,14 @@ class WorkCommandMixin:
                 f"[dim]continue {cycle}/{max_cycles} | remaining {remaining} | {usage}[/]"
             )
             prompt = WORK_CONTINUE_PROMPT
-        self.console.print(
-            f"[yellow]paused[/] [dim]{max_cycles} cycles | {self._format_work_progress()} | /work continue[/]"
-        )
+        if loop_error:
+            self.console.print(
+                f"[red]Aborted[/] [dim]after error in cycle {max_cycles} | "
+                f"{self._format_work_progress()}[/]"
+            )
+        else:
+            self.console.print(
+                f"[yellow]paused[/] [dim]{max_cycles} cycles | "
+                f"{self._format_work_progress()} | /work continue[/]"
+            )
 

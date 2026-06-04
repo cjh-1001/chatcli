@@ -1,6 +1,6 @@
 """Technique routing helper for reverse-engineering workflows."""
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
 ROUTES = [
@@ -193,8 +193,9 @@ class ReverseTechniqueMapTool(Tool):
         max_routes: int = 5,
         **kwargs,
     ) -> ToolResult:
-        text = " ".join([goal or ""] + [str(s) for s in (signals or [])]).lower()
-        max_routes = max(1, min(int(max_routes or 5), len(ROUTES)))
+        signals = coerce_str_list(signals)
+        text = " ".join([goal or ""] + signals).lower()
+        max_routes = coerce_int(max_routes, 5, minimum=1, maximum=len(ROUTES))
         scored = []
         for route in ROUTES:
             score = 0

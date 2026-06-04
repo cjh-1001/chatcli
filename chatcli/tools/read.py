@@ -10,7 +10,8 @@ class ReadTool(Tool):
     description = (
         "Read a file from the local filesystem. "
         "Returns the file content with line numbers (1-indexed). "
-        "Use offset and limit for long files. Max file size: 5MB. Output truncated at 50000 characters."
+        "Use offset and limit for long files. Whole-file reads are capped at 5MB. "
+        "Output truncated at 50000 characters."
     )
     parameters = {
         "type": "object",
@@ -37,25 +38,47 @@ class ReadTool(Tool):
             return ToolResult(content=f"File not found: {file_path}", is_error=True)
         if path.is_dir():
             return ToolResult(content=f"Path is a directory, not a file: {file_path}", is_error=True)
-        if path.stat().st_size > MAX_FILE_SIZE:
-            return ToolResult(
-                content=f"File too large ({path.stat().st_size} bytes). Use offset/limit or read a smaller file.",
-                is_error=True,
-            )
-
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except Exception as e:
-            return ToolResult(content=f"Error reading file: {e}", is_error=True)
 
         if offset is not None and offset < 1:
             return ToolResult(content="Error: offset must be >= 1.", is_error=True)
         if limit is not None and limit < 1:
             return ToolResult(content="Error: limit must be >= 1.", is_error=True)
+        file_size = path.stat().st_size
+        if file_size > MAX_FILE_SIZE and (offset is None or limit is None):
+            return ToolResult(
+                content=(
+                    f"File too large ({file_size} bytes). "
+                    "Use both offset and limit to read a bounded line range."
+                ),
+                is_error=True,
+            )
+
+        try:
+            if file_size > MAX_FILE_SIZE:
+                lines = []
+                start_line = offset or 1
+                end_line = start_line + (limit or 0) - 1
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    for line_no, line in enumerate(f, start=1):
+                        if line_no < start_line:
+                            continue
+                        if line_no > end_line:
+                            break
+                        lines.append(line)
+                total_lines = None
+            else:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                total_lines = len(lines)
+        except Exception as e:
+            return ToolResult(content=f"Error reading file: {e}", is_error=True)
+
         start = (offset - 1) if offset else 0
-        end = start + limit if limit else len(lines)
-        selected = lines[start:end]
+        if file_size > MAX_FILE_SIZE:
+            selected = lines
+        else:
+            end = start + limit if limit else len(lines)
+            selected = lines[start:end]
 
         numbered = []
         for i, line in enumerate(selected, start=start + 1):
@@ -65,4 +88,4 @@ class ReadTool(Tool):
         if len(result) > 50000:
             result = result[:50000] + "\n... (truncated)"
 
-        return ToolResult(content=result, metadata={"lines": len(selected), "total_lines": len(lines)})
+        return ToolResult(content=result, metadata={"lines": len(selected), "total_lines": total_lines})

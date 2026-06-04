@@ -1,5 +1,6 @@
 include README.md
 include requirements.txt
+include requirements-reverse.txt
 include pyproject.toml
 
 # Skills data files
@@ -8,6 +9,10 @@ recursive-include chatcli/skills *.py
 
 # Template data files
 recursive-include chatcli/templates *.json
+
+# IDA helper scripts
+recursive-include chatcli/ida_scripts *.py
+recursive-include chatcli/ida_scripts *.md
 
 # Exclude local state
 prune .chatcli

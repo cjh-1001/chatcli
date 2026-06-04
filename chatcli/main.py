@@ -52,8 +52,14 @@ permissions:
     - multi_edit
     - ida_analyze
     - ida_deobfuscate
+    - ida_mcp_ensure
+    - ida_mcp_probe
+    - ida_mcp_list_tools
+    - ida_mcp_call
     - runtime_string_hooks
     - external_static_analyze
+    - ghidra_analyze
+    - angr_triage
     - yara_scan
     - upx_unpack
     - binary_patch
@@ -81,6 +87,19 @@ tool_preview_lines: 0        # 0 keeps terminal output compact; errors still sho
 tool_preview_chars: 800      # max chars to echo when previews are enabled
 search_backend: auto        # auto | bing | duckduckgo
 ida_path: ""                 # path to idat64/idat (headless IDA); avoid pointing to ida gui
+# Example: ghidra_path: 'F:/ghidra_11.1.2_PUBLIC'
+ghidra_path: ""              # path to analyzeHeadless or a Ghidra install directory
+# Example: die_path: 'F:/DetectItEasy v1.0/stuff/diec.exe'
+die_path: ""                 # path to diec.exe from Detect It Easy
+# Example: exiftool_path: 'F:/reverseTools/exiftool.exe'
+exiftool_path: ""            # path to exiftool.exe
+# Example: upx_path: 'F:/reverseTools/upx.exe'
+upx_path: ""                 # path to upx.exe
+ida_mcp_url: ""              # IDA MCP HTTP endpoint; default is http://127.0.0.1:13337/mcp
+ida_mcp_start_command: ""    # optional command used by ida_mcp_ensure to start the MCP server
+ida_mcp_auto_prepare: false  # pre-discover IDA MCP tools before model calls
+ida_mcp_auto_start: false    # allow auto_prepare to run ida_mcp_start_command
+ida_mcp_tool_limit: 80       # max concrete IDA MCP tools exposed to the model
 auto_resume: false           # auto-restore last session + continue work on startup
 auto_compress: true          # auto-compress context when it gets too long
 compress_threshold: 80000    # tokens - trigger compression above this
@@ -140,6 +159,15 @@ def _render_config(settings: dict[str, str] | None = None) -> str:
     api_key = settings.get("api_key", "")
     api_base = settings.get("api_base", "")
     ida_path = settings.get("ida_path", "")
+    ghidra_path = settings.get("ghidra_path", "")
+    die_path = settings.get("die_path", "")
+    exiftool_path = settings.get("exiftool_path", "")
+    upx_path = settings.get("upx_path", "")
+    ida_mcp_url = settings.get("ida_mcp_url", "")
+    ida_mcp_start_command = settings.get("ida_mcp_start_command", "")
+    ida_mcp_auto_prepare = settings.get("ida_mcp_auto_prepare", "false")
+    ida_mcp_auto_start = settings.get("ida_mcp_auto_start", "false")
+    ida_mcp_tool_limit = settings.get("ida_mcp_tool_limit", "80")
     context_file = settings.get("context_file", ".chatcli/context.md")
 
     lines: list[str] = []
@@ -159,6 +187,24 @@ def _render_config(settings: dict[str, str] | None = None) -> str:
             lines.append("  api_base: " + _yaml_string(api_base))
         elif line.startswith("ida_path:"):
             lines.append(f"ida_path: {_yaml_string(ida_path)}                 # path to idat64/idat (headless IDA); avoid pointing to ida gui")
+        elif line.startswith("ghidra_path:"):
+            lines.append(f"ghidra_path: {_yaml_string(ghidra_path)}              # path to analyzeHeadless or a Ghidra install directory")
+        elif line.startswith("die_path:"):
+            lines.append(f"die_path: {_yaml_string(die_path)}                 # path to diec.exe from Detect It Easy")
+        elif line.startswith("exiftool_path:"):
+            lines.append(f"exiftool_path: {_yaml_string(exiftool_path)}            # path to exiftool.exe")
+        elif line.startswith("upx_path:"):
+            lines.append(f"upx_path: {_yaml_string(upx_path)}                 # path to upx.exe")
+        elif line.startswith("ida_mcp_url:"):
+            lines.append(f"ida_mcp_url: {_yaml_string(ida_mcp_url)}              # IDA MCP HTTP endpoint; default is http://127.0.0.1:13337/mcp")
+        elif line.startswith("ida_mcp_start_command:"):
+            lines.append(f"ida_mcp_start_command: {_yaml_string(ida_mcp_start_command)}    # optional command used by ida_mcp_ensure to start the MCP server")
+        elif line.startswith("ida_mcp_auto_prepare:"):
+            lines.append(f"ida_mcp_auto_prepare: {str(ida_mcp_auto_prepare).lower()}  # pre-discover IDA MCP tools before model calls")
+        elif line.startswith("ida_mcp_auto_start:"):
+            lines.append(f"ida_mcp_auto_start: {str(ida_mcp_auto_start).lower()}    # allow auto_prepare to run ida_mcp_start_command")
+        elif line.startswith("ida_mcp_tool_limit:"):
+            lines.append(f"ida_mcp_tool_limit: {ida_mcp_tool_limit}       # max concrete IDA MCP tools exposed to the model")
         elif line.startswith("context_file:"):
             lines.append(f"context_file: {_yaml_string(context_file)}")
         else:

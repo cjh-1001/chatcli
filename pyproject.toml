@@ -20,8 +20,31 @@ dependencies = [
 # tiktoken provides accurate token counting for context compression.
 # On platforms without pre-built wheels it needs a Rust toolchain to build.
 # Leave it out if you don't have Rust — chatcli falls back to a heuristic counter.
-all = ["tiktoken>=0.7.0"]
 tiktoken = ["tiktoken>=0.7.0"]
+angr = ["angr>=9.2.0"]
+frida = [
+    "frida>=16.0.0",
+    "frida-tools>=13.0.0",
+]
+flare = [
+    "flare-capa>=9.0.0",
+    "flare-floss>=3.1.0",
+]
+reverse = [
+    "angr>=9.2.0",
+    "frida>=16.0.0",
+    "frida-tools>=13.0.0",
+    "flare-capa>=9.0.0",
+    "flare-floss>=3.1.0",
+]
+all = [
+    "tiktoken>=0.7.0",
+    "angr>=9.2.0",
+    "frida>=16.0.0",
+    "frida-tools>=13.0.0",
+    "flare-capa>=9.0.0",
+    "flare-floss>=3.1.0",
+]
 
 [project.scripts]
 chatcli = "chatcli.main:main"

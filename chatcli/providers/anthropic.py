@@ -4,17 +4,28 @@ import json
 from collections.abc import Callable
 
 import anthropic
+import httpx
 from .base import BaseProvider, LLMResponse
 
 
 class AnthropicProvider(BaseProvider):
     def __init__(self, config):
         self.config = config
+        # Generous read timeout so streaming isn't killed when the model
+        # pauses between chunks. SDK retries are disabled — agent-level
+        # _retry_chat handles retries with backoff.
+        timeout = httpx.Timeout(
+            config.request_timeout,
+            connect=30.0,
+            read=max(config.request_timeout, 600.0),
+            write=60.0,
+            pool=30.0,
+        )
         self.client = anthropic.Anthropic(
             api_key=config.provider.api_key or None,
             base_url=config.provider.api_base or None,
-            timeout=config.request_timeout,
-            max_retries=config.max_retries,
+            timeout=timeout,
+            max_retries=0,  # agent._retry_chat handles retries
         )
 
     def chat(self, messages: list[dict], tools: list[dict], stream: bool = True,
@@ -52,15 +63,28 @@ class AnthropicProvider(BaseProvider):
             "model": self.config.provider.model,
             "max_tokens": self.config.provider.max_tokens,
             "messages": anthropic_messages,
-            "tools": anthropic_tools,
         }
+        if anthropic_tools:
+            kwargs["tools"] = anthropic_tools
 
         if system:
             kwargs["system"] = system.strip()
         if self.config.provider.thinking:
+            max_tokens = int(self.config.provider.max_tokens or 0)
+            requested_budget = int(self.config.provider.thinking_budget or 0)
+            if max_tokens > 1024:
+                # Anthropic extended thinking requires the budget to fit inside
+                # max_tokens and still leave room for the visible answer.
+                budget = max(1024, min(requested_budget, max_tokens // 2))
+            else:
+                budget = 0
+        else:
+            budget = 0
+
+        if budget:
             kwargs["thinking"] = {
                 "type": "enabled",
-                "budget_tokens": self.config.provider.thinking_budget,
+                "budget_tokens": budget,
             }
 
         if stream:

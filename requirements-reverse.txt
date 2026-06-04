@@ -1,0 +1,19 @@
+# Optional reverse-engineering Python packages for chatcli.
+# Install:
+#   py -3 -m pip install -r requirements-reverse.txt
+#
+# These are intentionally not in requirements.txt because they are heavy and
+# unnecessary for normal coding/chat usage.
+
+-r requirements.txt
+
+# Symbolic/static binary analysis used by angr_triage.
+angr>=9.2.0
+
+# Runtime instrumentation used by generated Frida collectors and CLI workflows.
+frida>=16.0.0
+frida-tools>=13.0.0
+
+# FLARE static-analysis CLIs used by external_static_analyze when installed.
+flare-capa>=9.0.0
+flare-floss>=3.1.0

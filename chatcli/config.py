@@ -7,25 +7,43 @@ from dataclasses import dataclass, field
 import yaml
 
 
+def _bool_value(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
+
+
 DEFAULT_AUTO_TOOLS = [
     "read_file", "glob", "grep", "list_dir", "web_search",
-    "web_fetch", "git_status", "git_diff", "binary_inspect",
+    "web_fetch", "json_extract", "git_status", "git_diff", "binary_inspect",
     "binary_find", "binary_hexdump", "encoded_string_extract",
     "obfuscated_data_map", "reverse_technique_map", "reverse_evidence_map",
 ]
 DEFAULT_ASK_TOOLS = [
     "bash", "write_file", "edit_file", "multi_edit", "ida_analyze",
-    "ida_focus_decompile", "ida_deobfuscate", "runtime_string_hooks", "external_static_analyze",
-    "yara_scan", "upx_unpack", "binary_patch", "chatcli_auto_request",
+    "ida_focus_decompile", "ida_deobfuscate", "ida_mcp_ensure", "ida_mcp_probe",
+    "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks", "external_static_analyze",
+    "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
+    "chatcli_auto_request",
 ]
 BUILTIN_AUTO_TOOLS = (
-    "git_status", "git_diff", "binary_inspect", "binary_find",
+    "json_extract", "git_status", "git_diff", "binary_inspect", "binary_find",
     "binary_hexdump", "encoded_string_extract", "obfuscated_data_map",
     "reverse_technique_map", "reverse_evidence_map",
 )
 BUILTIN_ASK_TOOLS = (
-    "multi_edit", "ida_analyze", "ida_focus_decompile", "ida_deobfuscate", "runtime_string_hooks",
-    "external_static_analyze", "yara_scan", "upx_unpack", "binary_patch",
+    "multi_edit", "ida_analyze", "ida_focus_decompile", "ida_deobfuscate",
+    "ida_mcp_ensure", "ida_mcp_probe", "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks",
+    "external_static_analyze", "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
     "chatcli_auto_request",
 )
 CONFIG_FILENAMES = ("config.yaml", "config.yml")
@@ -46,7 +64,7 @@ class ProviderConfig:
     api_base: str = ""
     max_tokens: int = 8192
     thinking: bool = True
-    thinking_budget: int = 16000
+    thinking_budget: int = 4096
 
 
 @dataclass
@@ -82,6 +100,15 @@ class Config:
     tool_preview_chars: int = 800
     search_backend: str = "auto"
     ida_path: str = ""
+    ghidra_path: str = ""
+    die_path: str = ""
+    exiftool_path: str = ""
+    upx_path: str = ""
+    ida_mcp_url: str = ""
+    ida_mcp_start_command: str = ""
+    ida_mcp_auto_prepare: bool = False
+    ida_mcp_auto_start: bool = False
+    ida_mcp_tool_limit: int = 80
     auto_resume: bool = False
     auto_compress: bool = True
     compress_threshold: int = 80000  # trigger compression when context exceeds this many tokens
@@ -225,6 +252,29 @@ class Config:
             cfg.provider.api_base = os.environ["CHATCLI_API_BASE"]
         if os.environ.get("IDA_PATH"):
             cfg.ida_path = os.environ["IDA_PATH"]
+        if os.environ.get("GHIDRA_HEADLESS_PATH"):
+            cfg.ghidra_path = os.environ["GHIDRA_HEADLESS_PATH"]
+        elif os.environ.get("GHIDRA_HOME"):
+            cfg.ghidra_path = os.environ["GHIDRA_HOME"]
+        if os.environ.get("DIE_PATH"):
+            cfg.die_path = os.environ["DIE_PATH"]
+        if os.environ.get("EXIFTOOL_PATH"):
+            cfg.exiftool_path = os.environ["EXIFTOOL_PATH"]
+        if os.environ.get("UPX_PATH"):
+            cfg.upx_path = os.environ["UPX_PATH"]
+        if os.environ.get("IDA_MCP_URL"):
+            cfg.ida_mcp_url = os.environ["IDA_MCP_URL"]
+        if os.environ.get("IDA_MCP_START_COMMAND"):
+            cfg.ida_mcp_start_command = os.environ["IDA_MCP_START_COMMAND"]
+        if os.environ.get("IDA_MCP_AUTO_PREPARE"):
+            cfg.ida_mcp_auto_prepare = _bool_value(os.environ["IDA_MCP_AUTO_PREPARE"], cfg.ida_mcp_auto_prepare)
+        if os.environ.get("IDA_MCP_AUTO_START"):
+            cfg.ida_mcp_auto_start = _bool_value(os.environ["IDA_MCP_AUTO_START"], cfg.ida_mcp_auto_start)
+        if os.environ.get("IDA_MCP_TOOL_LIMIT"):
+            try:
+                cfg.ida_mcp_tool_limit = int(os.environ["IDA_MCP_TOOL_LIMIT"])
+            except ValueError:
+                pass
 
         if not cfg.workspace:
             cfg.workspace = os.getcwd()
@@ -299,8 +349,49 @@ class Config:
             cfg.search_backend = data["search_backend"]
         if "ida_path" in data:
             cfg.ida_path = data["ida_path"]
+        if "ghidra_path" in data:
+            cfg.ghidra_path = data["ghidra_path"]
+        if "die_path" in data:
+            cfg.die_path = data["die_path"]
+        if "exiftool_path" in data:
+            cfg.exiftool_path = data["exiftool_path"]
+        if "upx_path" in data:
+            cfg.upx_path = data["upx_path"]
+        if "ida_mcp_url" in data:
+            cfg.ida_mcp_url = data["ida_mcp_url"]
+        if "ida_mcp_start_command" in data:
+            cfg.ida_mcp_start_command = data["ida_mcp_start_command"]
+        if "ida_mcp_auto_prepare" in data:
+            cfg.ida_mcp_auto_prepare = _bool_value(data["ida_mcp_auto_prepare"], cfg.ida_mcp_auto_prepare)
+        if "ida_mcp_auto_start" in data:
+            cfg.ida_mcp_auto_start = _bool_value(data["ida_mcp_auto_start"], cfg.ida_mcp_auto_start)
+        if "ida_mcp_tool_limit" in data:
+            try:
+                cfg.ida_mcp_tool_limit = int(data["ida_mcp_tool_limit"])
+            except (TypeError, ValueError):
+                pass
         if "reverse" in data and isinstance(data["reverse"], dict):
             cfg.ida_path = data["reverse"].get("ida_path", cfg.ida_path)
+            cfg.ghidra_path = data["reverse"].get("ghidra_path", cfg.ghidra_path)
+            cfg.die_path = data["reverse"].get("die_path", cfg.die_path)
+            cfg.exiftool_path = data["reverse"].get("exiftool_path", cfg.exiftool_path)
+            cfg.upx_path = data["reverse"].get("upx_path", cfg.upx_path)
+            cfg.ida_mcp_url = data["reverse"].get("ida_mcp_url", cfg.ida_mcp_url)
+            cfg.ida_mcp_start_command = data["reverse"].get(
+                "ida_mcp_start_command", cfg.ida_mcp_start_command
+            )
+            cfg.ida_mcp_auto_prepare = _bool_value(
+                data["reverse"].get("ida_mcp_auto_prepare"), cfg.ida_mcp_auto_prepare
+            )
+            cfg.ida_mcp_auto_start = _bool_value(
+                data["reverse"].get("ida_mcp_auto_start"), cfg.ida_mcp_auto_start
+            )
+            try:
+                cfg.ida_mcp_tool_limit = int(
+                    data["reverse"].get("ida_mcp_tool_limit", cfg.ida_mcp_tool_limit)
+                )
+            except (TypeError, ValueError):
+                pass
         if "auto_resume" in data:
             cfg.auto_resume = data["auto_resume"]
         if "auto_compress" in data:

@@ -11,12 +11,16 @@ from .grep import GrepTool
 from .list_dir import ListDirTool
 from .web_search import WebSearchTool
 from .web_fetch import WebFetchTool
+from .json_extract import JsonExtractTool
 from .git_tools import GitStatusTool, GitDiffTool
 from .binary_inspect import BinaryInspectTool
 from .binary_search import BinaryFindTool, BinaryHexdumpTool
 from .binary_patch import BinaryPatchTool
 from .ida import IdaAnalyzeTool, IdaProbeTool
 from .ida_focus import IdaFocusDecompileTool
+from .ida_mcp import IdaMcpCallTool, IdaMcpEnsureTool, IdaMcpListToolsTool, IdaMcpProbeTool
+from .ghidra import GhidraAnalyzeTool, GhidraProbeTool
+from .angr_triage import AngrTriageTool
 from .external_static import ExternalStaticAnalyzeTool, YaraScanTool, UpxUnpackTool
 from .reverse import (
     IdaDeobfuscateTool,
@@ -43,6 +47,7 @@ def create_registry(config=None) -> ToolRegistry:
         ListDirTool(),
         WebSearchTool(),
         WebFetchTool(),
+        JsonExtractTool(),
         GitStatusTool(),
         GitDiffTool(),
         BinaryInspectTool(),
@@ -53,15 +58,25 @@ def create_registry(config=None) -> ToolRegistry:
         IdaAnalyzeTool(getattr(config, "ida_path", "") if config else ""),
         IdaFocusDecompileTool(getattr(config, "ida_path", "") if config else ""),
         IdaDeobfuscateTool(getattr(config, "ida_path", "") if config else ""),
+        IdaMcpEnsureTool(
+            getattr(config, "ida_mcp_url", "") if config else "",
+            getattr(config, "ida_mcp_start_command", "") if config else "",
+        ),
+        IdaMcpProbeTool(getattr(config, "ida_mcp_url", "") if config else ""),
+        IdaMcpListToolsTool(getattr(config, "ida_mcp_url", "") if config else ""),
+        IdaMcpCallTool(getattr(config, "ida_mcp_url", "") if config else ""),
+        GhidraProbeTool(getattr(config, "ghidra_path", "") if config else ""),
+        GhidraAnalyzeTool(getattr(config, "ghidra_path", "") if config else ""),
+        AngrTriageTool(),
         EncodedStringExtractTool(),
         ObfuscatedDataMapTool(),
         ReverseTechniqueMapTool(),
         ReverseEvidenceMapTool(),
         RuntimeStringHooksTool(),
-        ExternalStaticAnalyzeTool(),
+        ExternalStaticAnalyzeTool(config),
         YaraScanTool(),
-        UpxUnpackTool(),
-        ToolHealthCheckTool(),
+        UpxUnpackTool(config),
+        ToolHealthCheckTool(config),
         ChatcliAutoRequestTool(),
     ]
     for tool in tools:
@@ -73,9 +88,13 @@ __all__ = [
     "Tool", "ToolResult", "ToolRegistry",
     "BashTool", "ReadTool", "WriteTool", "EditTool",
     "MultiEditTool", "GlobTool", "GrepTool", "ListDirTool",
-    "WebSearchTool", "WebFetchTool", "GitStatusTool", "GitDiffTool",
+    "WebSearchTool", "WebFetchTool", "JsonExtractTool",
+    "GitStatusTool", "GitDiffTool",
     "BinaryInspectTool", "BinaryFindTool", "BinaryHexdumpTool", "BinaryPatchTool",
-    "IdaProbeTool", "IdaAnalyzeTool", "IdaFocusDecompileTool", "ExternalStaticAnalyzeTool", "YaraScanTool",
+    "IdaProbeTool", "IdaAnalyzeTool", "IdaFocusDecompileTool",
+    "IdaMcpEnsureTool", "IdaMcpProbeTool", "IdaMcpListToolsTool", "IdaMcpCallTool",
+    "GhidraProbeTool", "GhidraAnalyzeTool", "AngrTriageTool",
+    "ExternalStaticAnalyzeTool", "YaraScanTool",
     "IdaDeobfuscateTool", "EncodedStringExtractTool", "RuntimeStringHooksTool",
     "ObfuscatedDataMapTool", "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",

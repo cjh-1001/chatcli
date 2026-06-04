@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Malware Analysis Report: suspicious.exe</title>
+<style>
+:root {
+  --bg: #f8f9fa;
+  --card: #ffffff;
+  --text: #212529;
+  --muted: #6c757d;
+  --border: #dee2e6;
+  --accent: #2563eb;
+  --critical: #dc2626;
+  --high: #ea580c;
+  --medium: #ca8a04;
+  --low: #16a34a;
+  --info: #6b7280;
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --text: #e4e5e7;
+    --muted: #8b8fa3;
+    --border: #2a2d3a;
+    --accent: #5b8def;
+    --critical: #f87171;
+    --high: #fb923c;
+    --medium: #facc15;
+    --low: #4ade80;
+    --info: #9ca3af;
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  padding: 2rem 1rem;
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* ── Header ── */
+header {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+header .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+header .meta .tag {
+  background: var(--accent);
+  color: #fff;
+  padding: 0.15rem 0.6rem;
+  border-radius: 99px;
+  font-size: 0.78rem;
+}
+
+header .target-info {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+/* ── Summary ── */
+.summary {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.summary h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+}
+
+/* ── Sections ── */
+.section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.section-header:hover { background: var(--bg); }
+
+.section-header .toggle {
+  margin-right: 0.6rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+
+.section-header h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.section-body {
+  padding: 0 1.5rem 1.5rem;
+}
+
+.section-body.collapsed { display: none; }
+
+.section-body .intro {
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+/* ── Findings ── */
+.finding {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.finding:last-child { margin-bottom: 0; }
+
+.finding-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.severity {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.sev-critical { background: var(--critical); color: #fff; }
+.sev-high     { background: var(--high);     color: #fff; }
+.sev-medium   { background: var(--medium);   color: #000; }
+.sev-low      { background: var(--low);      color: #fff; }
+.sev-info     { background: var(--info);     color: #fff; }
+
+.finding-location {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.finding-desc { margin-bottom: 0.4rem; }
+.finding-desc p { margin-bottom: 0.3rem; }
+
+.finding-code {
+  margin: 0.5rem 0;
+}
+
+.finding-remediation {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg);
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.finding-remediation strong { color: var(--low); }
+
+/* ── Code blocks ── */
+.code-block {
+  margin: 0.5rem 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.code-block .code-lang {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.3rem 0.8rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.code-block pre {
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+/* ── Tables ── */
+.table-wrap {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+.table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.table-wrap caption {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+  text-align: left;
+}
+
+.table-wrap th {
+  text-align: left;
+  font-weight: 600;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--border);
+  background: var(--bg);
+}
+
+.table-wrap td {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-wrap tr:hover td { background: var(--bg); }
+
+/* ── Timeline ── */
+.timeline { margin: 0.5rem 0; }
+
+.timeline-item {
+  display: flex;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.timeline-item:last-child { border-bottom: none; }
+
+.timeline-time {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  min-width: 90px;
+  flex-shrink: 0;
+}
+
+/* ── Comparison ── */
+.comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.comparison .comp-panel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.comp-panel .comp-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.4rem 0.8rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.comp-panel .comp-body {
+  padding: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.comp-panel .comp-body pre {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  overflow-x: auto;
+}
+
+/* ── Appendix ── */
+.appendix {
+  margin-top: 1.5rem;
+  padding: 1.5rem 2rem;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.appendix h2 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+/* ── Footer ── */
+footer {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 2rem;
+}
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .comparison { grid-template-columns: 1fr; }
+  header { padding: 1.25rem; }
+  .section-header { padding: 0.75rem 1rem; }
+  .section-body { padding: 0 1rem 1rem; }
+}
+
+@media print {
+  body { padding: 0; font-size: 11pt; }
+  .section-body.collapsed { display: block; }
+  .section-header { cursor: default; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>Malware Analysis Report: suspicious.exe</h1>
+<div class="meta">
+<span>2026-06-04</span>
+<span>by chatcli</span>
+</div>
+<div class="meta"><span class="tag">malware</span><span class="tag">trojan</span><span class="tag">windows</span></div>
+<div class="target-info">name: suspicious.exe &nbsp;|&nbsp; sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 &nbsp;|&nbsp; size: 245,760 bytes</div>
+</header>
+<div class="summary">
+<h2>Summary</h2>
+<h2>Executive Summary</h2>
+
+<p>This report documents analysis of <code>suspicious.exe</code>, a Windows PE executable that exhibits <strong>trojan-like behavior</strong>. The sample establishes persistence via registry Run keys, communicates with a C2 server at <code>192.168.1.100:4444</code>, and attempts to disable Windows Defender.</p>
+
+<p><strong>Overall risk: HIGH</strong></p>
+</div>
+<div class="section">
+<div class="section-header" onclick="toggleSection('static-analysis')">
+<span class="toggle" id="toggle-static-analysis">▼</span>
+<h3>Static Analysis</h3>
+</div>
+<div class="section-body " id="static-analysis">
+<div class="intro"><p>Basic file properties and PE structure overview.</p></div>
+<h3>PE Header</h3>
+
+<ul>
+<li><strong>Machine:</strong> x86-64</li>
+<li><strong>Subsystem:</strong> Windows GUI</li>
+<li><strong>Entry Point:</strong> 0x140001000</li>
+<li><strong>Sections:</strong> .text, .rdata, .data, .rsrc</li>
+<li><strong>Compile Timestamp:</strong> 2026-05-15</li>
+</ul>
+
+<h3>Imports</h3>
+
+<p>The binary imports functions from:</p>
+
+<ul>
+<li><code>kernel32.dll</code> — VirtualAlloc, WriteProcessMemory, CreateRemoteThread</li>
+<li><code>advapi32.dll</code> — RegSetValueExW, RegCreateKeyExW</li>
+<li><code>wininet.dll</code> — InternetOpenA, InternetConnectA</li>
+<li><code>shell32.dll</code> — ShellExecuteW</li>
+</ul>
+
+<p>The combination of <code>VirtualAlloc</code> + <code>WriteProcessMemory</code> + <code>CreateRemoteThread</code> is a classic <strong>process injection</strong> pattern.</p>
+</div>
+</div>
+<div class="section">
+<div class="section-header" onclick="toggleSection('findings')">
+<span class="toggle" id="toggle-findings">▼</span>
+<h3>Findings</h3>
+</div>
+<div class="section-body " id="findings">
+<div class="finding">
+<div class="finding-header">
+<span class="severity sev-critical">critical</span>
+<strong>Process Injection Capability</strong>
+<span class="finding-location">sub_140001200</span>
+</div>
+<div class="finding-desc"><p>The binary allocates memory in a target process (<code>VirtualAlloc</code>), writes shellcode, and creates a remote thread to execute it. <strong>This is a definitive indicator of code injection.</strong></p></div>
+<div class="finding-code"><pre><code>VirtualAlloc(hProcess, NULL, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, dwSize, NULL);
+CreateRemoteThread(hProcess, NULL, 0, lpStartAddress, NULL, 0, NULL);</code></pre></div>
+<div class="finding-remediation"><strong>🔧 Remediation:</strong> <p>Block <code>CreateRemoteThread</code> calls from non-whitelisted processes via EDR policy. Monitor for <code>VirtualAlloc</code> with <code>PAGE_EXECUTE_READWRITE</code> permissions.</p></div>
+</div>
+<div class="finding">
+<div class="finding-header">
+<span class="severity sev-high">high</span>
+<strong>Registry Persistence</strong>
+<span class="finding-location">sub_140001800</span>
+</div>
+<div class="finding-desc"><p>Creates a Run key to ensure execution on every system boot.</p></div>
+<div class="finding-code"><pre><code>RegCreateKeyExW(HKEY_CURRENT_USER, &quot;Software\\Microsoft\\Windows\\CurrentVersion\\Run&quot;, ...)
+RegSetValueExW(hKey, L&quot;SecurityHealth&quot;, ...)</code></pre></div>
+<div class="finding-remediation"><strong>🔧 Remediation:</strong> <p>Monitor registry Run key modifications. Use AppLocker or WDAC to restrict unauthorized executables.</p></div>
+</div>
+<div class="finding">
+<div class="finding-header">
+<span class="severity sev-medium">medium</span>
+<strong>Suspicious String Obfuscation</strong>
+<span class="finding-location">.rdata section</span>
+</div>
+<div class="finding-desc"><p>Multiple XOR-encoded strings found. The decoding routine at <code>sub_140001500</code> uses a single-byte XOR key (0x55).</p></div>
+<div class="finding-code"><pre><code>Key: 0x55
+Decoded: &quot;C:\\Users\\Public\\svchost.exe&quot;
+Decoded: &quot;192.168.1.100:4444&quot;
+Decoded: &quot;cmd.exe /c sc stop WinDefend&quot;</code></pre></div>
+<div class="finding-remediation"><strong>🔧 Remediation:</strong> <p>Use static string deobfuscation tools to detect XOR-encoded indicators.</p></div>
+</div>
+</div>
+</div>
+<div class="section">
+<div class="section-header" onclick="toggleSection('network-indicators')">
+<span class="toggle" id="toggle-network-indicators">▼</span>
+<h3>Network Indicators</h3>
+</div>
+<div class="section-body " id="network-indicators">
+<div class="table-wrap"><table>
+<caption>Extracted network indicators</caption>
+<thead><tr>
+<th>Type</th>
+<th>Value</th>
+<th>Context</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>C2 IP</td>
+<td>192.168.1.100</td>
+<td>Hardcoded, XOR-obfuscated</td>
+</tr>
+<tr>
+<td>C2 Port</td>
+<td>4444/TCP</td>
+<td>Reverse shell connection</td>
+</tr>
+<tr>
+<td>User-Agent</td>
+<td>Mozilla/5.0 (Windows NT 10.0; Win64; x64)</td>
+<td>Used in HTTP requests</td>
+</tr>
+<tr>
+<td>URI Pattern</td>
+<td>/api/beacon.php?id=%s</td>
+<td>C2 check-in endpoint</td>
+</tr>
+</tbody></table></div>
+</div>
+</div>
+<div class="section">
+<div class="section-header" onclick="toggleSection('execution-timeline')">
+<span class="toggle" id="toggle-execution-timeline">▼</span>
+<h3>Execution Timeline</h3>
+</div>
+<div class="section-body " id="execution-timeline">
+<div class="timeline">
+<div class="timeline-item">
+<span class="timeline-time">T+0ms</span>
+<span><p>Entry point — checks for debugger via <code>IsDebuggerPresent()</code></p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+15ms</span>
+<span><p>Anti-VM check — queries <code>HKLM\HARDWARE\DESCRIPTION\System\BIOS</code> for VMware/VirtualBox strings</p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+50ms</span>
+<span><p>Deobfuscates XOR-encoded strings in <code>.rdata</code></p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+120ms</span>
+<span><p>Drops copy to <code>C:\Users\Public\svchost.exe</code></p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+200ms</span>
+<span><p>Creates persistence via Run key</p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+350ms</span>
+<span><p>Attempts to disable Windows Defender via <code>sc stop WinDefend</code></p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+500ms</span>
+<span><p>Connects to C2 at <code>192.168.1.100:4444</code></p></span>
+</div>
+<div class="timeline-item">
+<span class="timeline-time">T+800ms</span>
+<span><p>Awaits C2 commands in loop</p></span>
+</div>
+</div>
+</div>
+</div>
+<div class="section">
+<div class="section-header" onclick="toggleSection('disassembly-comparison')">
+<span class="toggle" id="toggle-disassembly-comparison">▼</span>
+<h3>Disassembly Comparison</h3>
+</div>
+<div class="section-body " id="disassembly-comparison">
+<div class="comparison">
+<div class="comp-panel">
+<div class="comp-title">Original (obfuscated)</div>
+<div class="comp-body"><pre class="code-block"><code class="lang-asm">
+mov     rax, 0x1122334455667788
+xor     rax, 0x5544332211000000
+call    rax
+</code></pre></div>
+</div>
+<div class="comp-panel">
+<div class="comp-title">Deobfuscated</div>
+<div class="comp-body"><pre class="code-block"><code class="lang-asm">
+; Computed: 0x1122334455667788
+; XOR key: 0x5544332211000000
+; Result:  0x4466001166667788
+; → VirtualAlloc
+call    VirtualAlloc
+</code></pre></div>
+</div>
+</div>
+</div>
+</div>
+<div class="appendix">
+<h2>Appendix</h2>
+<h2>Detection Rules</h2>
+
+<h3>YARA</h3>
+<pre class="code-block"><code class="lang-yara">
+rule Trojan_Generic_ProcessInjection {
+    strings:
+        $a1 = &quot;VirtualAlloc&quot;
+        $a2 = &quot;CreateRemoteThread&quot;
+        $a3 = { 48 33 ?? ?? ?? ?? ?? 48 31 }
+    condition:
+        2 of them
+}
+</code></pre>
+
+<h3>Sigma</h3>
+<pre class="code-block"><code class="lang-yaml">
+title: Suspicious Registry Run Key Modification
+detection:
+    selection:
+        EventID: 13
+        TargetObject|contains: &#x27;\\CurrentVersion\\Run&#x27;
+    condition: selection
+</code></pre>
+</div>
+<footer>
+Generated by chatcli &middot; 2026-06-04 09:54
+</footer>
+</div>
+<script>
+function toggleSection(id) {
+  var body = document.getElementById(id);
+  var toggle = document.getElementById('toggle-' + id);
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    toggle.textContent = '▼';
+  } else {
+    body.classList.add('collapsed');
+    toggle.textContent = '▶';
+  }
+}
+</script>
+</body></html>

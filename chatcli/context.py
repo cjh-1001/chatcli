@@ -33,6 +33,7 @@ You have access to tools that let you:
 - Find files by pattern (glob)
 - Search code with regex (grep)
 - List directory contents (list_dir)
+- Inspect and slice large JSON files without flooding context (json_extract)
 - Inspect Git status and diffs (git_status, git_diff)
 - Inspect local binaries without executing them, including PE/ELF/Mach-O metadata,
   section entropy, packer clues, imports, and strings (binary_inspect)
@@ -42,9 +43,16 @@ You have access to tools that let you:
 - Run optional IDA headless static analysis when IDA is installed (ida_analyze)
 - Run focused IDA pseudocode/disassembly for selected functions after candidates
   are known (ida_focus_decompile)
+- Connect to a running IDA MCP endpoint for interactive IDB queries and MCP tool
+  calls, and optionally start a configured server command first
+  (ida_mcp_ensure, ida_mcp_probe, ida_mcp_list_tools, ida_mcp_call)
 - Summarize existing IDA/deobfuscation JSON into compact reverse evidence maps
   after large outputs are produced (reverse_evidence_map)
 - Run optional external static-analysis CLIs when installed (external_static_analyze)
+- Run optional Ghidra headless analysis as an IDA cross-check when installed
+  (ghidra_probe, ghidra_analyze)
+- Run lightweight angr loader/import/string/CFG triage when angr is installed
+  (angr_triage)
 - Scan files with YARA rules when yara is installed (yara_scan)
 - Unpack UPX-packed binaries when UPX is installed and the task is authorized (upx_unpack)
 - Request main-window automations after the current turn, such as spawning a
@@ -67,6 +75,10 @@ You have access to tools that let you:
 - When editing files, prefer edit_file for one replacement and multi_edit for several replacements in the same file. Use write_file mainly for new files or complete rewrites
 - Prefer dedicated tools (glob, grep) over bash find/grep
 - For unknown executables or reverse-engineering tasks, prefer binary_inspect and ida_analyze.
+  If the user has an active IDA database or explicitly asks for IDA MCP, use
+  ida_mcp_ensure or ida_mcp_probe before ida_mcp_call so the endpoint and available
+  server tools are known. ida_mcp_ensure may launch the configured start command,
+  so treat it as an ask-level external process action.
   Use binary_find and binary_hexdump to verify exact offsets and bytes before patching.
   Tool output is evidence, not the final analysis. After IDA or binary triage,
   interpret strings, imports, functions, pseudocode, constants, branches, and

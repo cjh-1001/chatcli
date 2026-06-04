@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import Path
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_bool, coerce_int
 from ..checkpoint import backup_file
 
 
@@ -139,6 +139,8 @@ class BinaryPatchTool(Tool):
 
         data = path.read_bytes()
         before_sha = _sha256(data)
+        in_place = coerce_bool(in_place, False)
+        occurrence = coerce_int(occurrence, 1, minimum=1, maximum=1000)
         if expected_sha256 and expected_sha256.lower() != before_sha.lower():
             return ToolResult(
                 content=(
@@ -180,8 +182,6 @@ class BinaryPatchTool(Tool):
                 return ToolResult(content="Error: old_hex is required for find_replace mode.", is_error=True)
             if len(old) != len(new):
                 return ToolResult(content="Error: old_hex and new_hex must be the same length.", is_error=True)
-            if occurrence < 1:
-                return ToolResult(content="Error: occurrence must be >= 1.", is_error=True)
             matches = []
             start = 0
             while True:

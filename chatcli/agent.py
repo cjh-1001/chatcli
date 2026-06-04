@@ -9,6 +9,11 @@ from .tools import create_registry
 from .providers import create_provider
 from .permissions import PermissionManager
 from .context import build_system_prompt
+from .tools.ida_mcp import (
+    IdaMcpEnsureTool,
+    discover_ida_mcp_tools,
+    make_ida_mcp_dynamic_tools,
+)
 from .agent_compression import CompressionMixin
 from .agent_session import AgentSessionMixin
 from .agent_tools import AgentToolMixin
@@ -40,6 +45,8 @@ class Agent(AgentSessionMixin, CompressionMixin, AgentToolMixin, AgentOutputMixi
         self._stream_open_line = False
         self._last_autosave_error: str | None = None
         self._compression_events: list[dict] = []
+        self._ida_mcp_prepare_attempted = False
+        self._ida_mcp_dynamic_tools = 0
         self._init_system_prompt()
         # Crash detection: mark session as running
         from .checkpoint import mark_running
@@ -48,6 +55,57 @@ class Agent(AgentSessionMixin, CompressionMixin, AgentToolMixin, AgentOutputMixi
     def _init_system_prompt(self):
         system_prompt = build_system_prompt(self.workspace, self.config.context_file)
         self._history = [{"role": "system", "content": system_prompt}]
+
+    def _prepare_ida_mcp_tools(self) -> None:
+        """Pre-discover IDA MCP tools so the model can call them directly."""
+        if self._ida_mcp_prepare_attempted:
+            return
+        if not getattr(self.config, "ida_mcp_auto_prepare", False):
+            return
+        self._ida_mcp_prepare_attempted = True
+
+        url = getattr(self.config, "ida_mcp_url", "") or ""
+        timeout_ms = 30000
+        if getattr(self.config, "ida_mcp_auto_start", False):
+            self._safe_print("  [dim]preparing IDA MCP tools...[/]")
+            ensure = IdaMcpEnsureTool(
+                getattr(self.config, "ida_mcp_url", ""),
+                getattr(self.config, "ida_mcp_start_command", ""),
+            )
+            result = ensure.execute(
+                mcp_url=url or None,
+                startup_timeout=30000,
+                probe_timeout=3000,
+                workspace=self.workspace,
+            )
+            if result.is_error:
+                self._safe_print(f"  [yellow]IDA MCP auto-prepare skipped[/] [dim]{result.content.splitlines()[0]}[/]")
+                return
+            url = result.metadata.get("url") or url
+        try:
+            url, mcp_tools, _session_id = discover_ida_mcp_tools(
+                url or None,
+                getattr(self.config, "ida_mcp_url", ""),
+                timeout_ms=timeout_ms,
+            )
+        except Exception as e:
+            self._safe_print(f"  [dim]IDA MCP auto-prepare skipped: {type(e).__name__}: {e}[/]")
+            return
+
+        existing = {tool.name for tool in self.tools.list_tools()}
+        dynamic_tools = make_ida_mcp_dynamic_tools(
+            url,
+            mcp_tools,
+            existing_names=existing,
+            limit=int(getattr(self.config, "ida_mcp_tool_limit", 80) or 80),
+        )
+        for tool in dynamic_tools:
+            self.tools.register(tool)
+        self._ida_mcp_dynamic_tools = len(dynamic_tools)
+        if dynamic_tools:
+            self._safe_print(
+                f"  [green]IDA MCP ready[/] [dim]{len(dynamic_tools)} tools exposed from {url}[/]"
+            )
 
     # ── Session persistence ──────────────────────────────────────
 
@@ -178,15 +236,23 @@ The user's request follows below.
     # ── Core agent loop ───────────────────────────────────────────
 
     def _retry_chat(self, tool_schemas: list[dict], max_retries: int = 3):
-        """Call provider.chat() with exponential backoff on connection errors."""
+        """Call provider.chat() with exponential backoff on connection errors.
+
+        On the last retry attempt falls back to non-streaming mode, which is
+        more reliable for long-running generations (e.g. large reports).
+        """
         last_error = None
         for attempt in range(max_retries):
+            # Last retry: fall back to non-streaming — it doesn't need a
+            # long-lived SSE connection and is immune to read timeouts
+            # between chunks.
+            use_stream = attempt < max_retries - 1
             try:
                 return self.provider.chat(
                     messages=self._history,
                     tools=tool_schemas,
-                    stream=True,
-                    on_text=lambda t: self._emit_text(t),
+                    stream=use_stream,
+                    on_text=lambda t: self._emit_text(t) if use_stream else None,
                 )
             except Exception as e:
                 last_error = e
@@ -226,6 +292,8 @@ The user's request follows below.
         is_provider_error = (
             "openai" in module
             or "anthropic" in module
+            or "httpx" in module
+            or "httpcore" in module
             or "api" in name.lower()
             or status is not None
         )
@@ -302,6 +370,7 @@ The user's request follows below.
         Returns (final_text, exhausted) where exhausted=True means
         max_tool_rounds was reached before the model produced a final answer.
         """
+        self._prepare_ida_mcp_tools()
         tool_schemas = self.tools.to_schemas()
 
         for round_num in range(self.config.max_tool_rounds):

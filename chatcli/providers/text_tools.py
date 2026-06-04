@@ -56,6 +56,18 @@ DIRECT_TOOL_TAG_PATTERN = re.compile(
 )
 SIMPLE_ATTR_RE = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*\"([^\"]*)\"")
 
+# Some models emit <function=tool_name>...<parameter=name>v</parameter>...</function>
+# inside <tool_call> blocks. This is a hybrid format combining XML-like tags
+# with equals-sign syntax instead of proper attributes.
+FUNCTION_EQ_PATTERN = re.compile(
+    r"<function=(\w+)>\s*(.*?)\s*</function>",
+    re.DOTALL | re.IGNORECASE,
+)
+PARAM_EQ_PATTERN = re.compile(
+    r"<parameter=(\w+)>\s*(.*?)\s*</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
+
 # Some models emit JavaScript/Python-style numeric literals inside otherwise
 # valid JSON tool calls, e.g. {"offset": 0x1e00}. JSON does not allow that, but
 # these literals are unambiguous for integer tool parameters.
@@ -320,6 +332,25 @@ def parse_tool_calls(text: str) -> list[dict]:
         if tool_calls:
             return tool_calls
 
+    # ── Phase 2c: <function=NAME> / <parameter=NAME> hybrid ──
+    # Handles <tool_call><function=hexdump><parameter=offset>0x10</parameter>...
+    # This is a malformed format some models emit with equals-sign syntax.
+    func_matches = FUNCTION_EQ_PATTERN.findall(text)
+    if not func_matches:
+        func_matches = FUNCTION_EQ_PATTERN.findall(text_unwrapped)
+    for i, (tool_name, inner) in enumerate(func_matches):
+        params = {}
+        for pname, pvalue in PARAM_EQ_PATTERN.findall(inner):
+            params[pname] = pvalue.strip()
+        if params:
+            tool_calls.append({
+                "id": f"text_func_eq_{i}",
+                "name": tool_name,
+                "input": params,
+            })
+    if tool_calls:
+        return tool_calls
+
     # ── Phase 3: Bare opening tag without content ──
     # Handles <tool_call name="x"/> or <tool_call name="x">
     open_matches = TOOL_CALL_OPEN_PATTERN.findall(text)
@@ -343,7 +374,7 @@ def parse_tool_calls(text: str) -> list[dict]:
 # Matches: <tool_call>, <tool_calls>, <parameter name="...">, or
 # bare {"name": "tool_name"...} JSON fragments.
 _HAS_TOOL_ATTEMPT = re.compile(
-    r"<tool_calls?|<parameter\s+name\s*=",
+    r"<tool_calls?|<function=|<parameter\s+(?:name\s*)?=",
     re.IGNORECASE,
 )
 
@@ -362,11 +393,30 @@ def strip_tool_calls(text: str) -> str:
     text = TOOL_CALL_PATTERN.sub("", text)
     text = TOOL_CALL_XML_PATTERN.sub("", text)
     text = PARAM_XML_PATTERN.sub("", text)
+    text = PARAM_EQ_PATTERN.sub("", text)
+    text = FUNCTION_EQ_PATTERN.sub("", text)
     text = TOOL_CALL_OPEN_PATTERN.sub("", text)
     text = _TOOL_TAG_CLEANUP_RE.sub("", text)
     # Collapse multiple blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _log_parsed_calls(raw_text: str, tool_calls: list[dict]) -> None:
+    """Diagnostic log: show raw model output and what parse_tool_calls extracted."""
+    import sys
+    if not tool_calls:
+        return  # Only log when tool calls were actually parsed
+    print("\n" + "=" * 60, file=sys.stderr)
+    print("[text-tools DEBUG] Parsed tool calls:", file=sys.stderr)
+    for tc in tool_calls:
+        name = tc.get("name", "?")
+        inp = tc.get("input", {})
+        print(f"  name={name}  input_keys={list(inp.keys())}  input={inp!r}", file=sys.stderr)
+    print("-" * 40, file=sys.stderr)
+    print("Raw model output (last 2000 chars):", file=sys.stderr)
+    print(raw_text[-2000:], file=sys.stderr)
+    print("=" * 60 + "\n", file=sys.stderr)
 
 
 class TextToolsProvider(BaseProvider):
@@ -433,6 +483,9 @@ class TextToolsProvider(BaseProvider):
         full_text = "".join(text_parts)
         tool_calls = parse_tool_calls(full_text)
 
+        # Debug: log raw model output and parsed tool calls
+        _log_parsed_calls(full_text, tool_calls)
+
         # If model tried to use tools but format was unparseable,
         # keep raw text so the agent's self-correction can detect
         # the malformed <tool_call> fragments and retry.
@@ -451,6 +504,9 @@ class TextToolsProvider(BaseProvider):
         resp = self.client.chat.completions.create(**kwargs)
         full_text = resp.choices[0].message.content or ""
         tool_calls = parse_tool_calls(full_text)
+
+        # Debug: log raw model output and parsed tool calls
+        _log_parsed_calls(full_text, tool_calls)
 
         if not tool_calls and _HAS_TOOL_ATTEMPT.search(full_text):
             clean_text = full_text

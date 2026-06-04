@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .reverse_text import optimize_ida_text_data, rank_text_items, short_text
 
 
@@ -126,15 +126,15 @@ class ReverseEvidenceMapTool(Tool):
         max_items: int = 40,
         **kwargs,
     ) -> ToolResult:
-        paths = [Path(p) for p in (json_paths or []) if str(p).strip()]
+        paths = [Path(p) for p in coerce_str_list(json_paths)]
         if not paths:
             return ToolResult(content="Error: json_paths cannot be empty.", is_error=True)
         missing = [str(p) for p in paths if not p.exists()]
         if missing:
             return ToolResult(content=f"Missing JSON files: {', '.join(missing)}", is_error=True)
 
-        keywords = [str(k) for k in (keywords or DEFAULT_KEYWORDS) if str(k).strip()]
-        max_items = max(5, min(int(max_items or 40), 200))
+        keywords = coerce_str_list(keywords) or list(DEFAULT_KEYWORDS)
+        max_items = coerce_int(max_items, 40, minimum=5, maximum=200)
         lines = ["# Reverse Evidence Map", "", f"Keywords: {', '.join(keywords)}"]
         metadata = {
             "files": len(paths),

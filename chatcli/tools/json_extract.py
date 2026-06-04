@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
 MAX_JSON_SIZE = 200 * 1024 * 1024
@@ -149,10 +149,10 @@ class JsonExtractTool(Tool):
             return ToolResult(content=f"Error reading JSON: {e}", is_error=True)
 
         mode = (mode or "summary").lower()
-        max_items = max(1, min(int(max_items or 40), 500))
-        max_depth = max(1, min(int(max_depth or 3), 8))
-        keywords = [str(k) for k in (keywords or []) if str(k).strip()]
-        fields = [str(f) for f in (fields or []) if str(f).strip()]
+        max_items = coerce_int(max_items, 40, minimum=1, maximum=500)
+        max_depth = coerce_int(max_depth, 3, minimum=1, maximum=8)
+        keywords = coerce_str_list(keywords)
+        fields = coerce_str_list(fields)
 
         lines = ["# JSON Extract", "", f"Path: {target}", f"Size: {size} bytes", f"Mode: {mode}"]
         metadata = {"path": str(target), "size": size, "mode": mode}

@@ -22,6 +22,18 @@ pip install -e .
 
 chatcli 需要 Python 3.10 或更高版本。
 
+逆向分析可选依赖：
+
+```powershell
+# pyproject extras
+pip install -e ".[reverse]"
+
+# 或 requirements 文件
+py -3 -m pip install -r requirements-reverse.txt
+```
+
+`reverse` 会安装 Python 包类依赖：`angr`、`frida`/`frida-tools`、`flare-capa`、`flare-floss`。Ghidra、Detect It Easy、YARA、UPX、ExifTool 这类独立程序仍需要单独安装。
+
 ### 1.1 验证安装
 
 安装完成后，先确认 `chatcli` 命令可用：
@@ -235,6 +247,7 @@ pip install anthropic openai rich prompt-toolkit pyyaml httpx
 | `No API key found` | 设置 `CHATCLI_API_KEY` 环境变量或运行 `chatcli --setup` |
 | `Python 3.10+ required` | 升级 Python 到 3.10 或更高版本 |
 | 安装后 import 报错 | 确认 `pip install -e .` 运行在项目根目录 |
+| 只想装逆向 Python 依赖 | `py -3 -m pip install -r requirements-reverse.txt` |
 
 ## 配置示例
 
@@ -262,6 +275,10 @@ permissions:
     - write_file
     - edit_file
     - multi_edit
+    - ida_mcp_ensure
+    - ida_mcp_probe
+    - ida_mcp_list_tools
+    - ida_mcp_call
   deny: []
   mode: default
   protect_sensitive_files: true
@@ -278,6 +295,15 @@ self_correction: true
 max_self_correction_rounds: 3
 show_diffs: true
 search_backend: auto
+ida_path: ""
+# Windows 示例，按自己的 Ghidra 解压目录修改：
+# ghidra_path: 'F:\ghidra_11.1.2_PUBLIC'
+ghidra_path: ""
+ida_mcp_url: ""
+ida_mcp_start_command: ""
+ida_mcp_auto_prepare: false
+ida_mcp_auto_start: false
+ida_mcp_tool_limit: 80
 ```
 
 不要把 `api_key` 写进这个文件后提交到 Git。确实要写本地 key 时，只写在本机的 `.chatcli/config.yaml`，并确认 `.chatcli/` 被 `.gitignore` 排除。
@@ -338,6 +364,126 @@ provider:
 | `CHATCLI_API_BASE` | 覆盖 API base URL |
 | `CHATCLI_CONFIG` | 指定配置文件路径 |
 | `IDA_PATH` | 指定 IDA/idat 路径，用于逆向分析工具 |
+| `IDA_MCP_URL` | 指定 IDA MCP HTTP endpoint，例如 `http://127.0.0.1:13337/mcp` |
+| `IDA_MCP_START_COMMAND` | 指定 `ida_mcp_ensure` 自动启动 IDA MCP 服务时执行的命令 |
+| `IDA_MCP_AUTO_PREPARE` | 为 true 时，模型调用前自动探测并注册具体 IDA MCP tools |
+| `IDA_MCP_AUTO_START` | 为 true 时，auto prepare 阶段允许执行 `ida_mcp_start_command` |
+| `IDA_MCP_TOOL_LIMIT` | 限制预接入时暴露给模型的具体 IDA MCP tool 数量 |
+| `GHIDRA_HEADLESS_PATH` | 指定 Ghidra `analyzeHeadless` 路径 |
+| `GHIDRA_HOME` | 指定 Ghidra 安装目录，chatcli 会查找 `support/analyzeHeadless` |
+
+## IDA MCP 接入
+
+chatcli 内置两条 IDA 路线：
+
+- `ida_analyze` / `ida_focus_decompile`：直接调用本机 `idat.exe` 跑 headless IDAPython，适合批量静态分析。
+- `ida_mcp_ensure` / `ida_mcp_probe` / `ida_mcp_list_tools` / `ida_mcp_call`：连接 IDA MCP HTTP 服务，适合让模型和打开中的 IDA 数据库交互。
+
+最小配置：
+
+```yaml
+ida_path: "D:/IDA Pro/idat.exe"
+ida_mcp_url: "http://127.0.0.1:13337/mcp"
+ida_mcp_start_command: ""
+ida_mcp_auto_prepare: true
+ida_mcp_auto_start: false
+```
+
+如果使用 `idalib-mcp` 这类 headless 服务，常见 endpoint 是：
+
+```yaml
+ida_mcp_url: "http://127.0.0.1:8745/mcp"
+ida_mcp_start_command: "py -m idalib_mcp.server --port 8745"
+ida_mcp_auto_prepare: true
+ida_mcp_auto_start: true
+ida_mcp_tool_limit: 80
+```
+
+使用顺序：
+
+1. 在 IDA 里启动/加载 IDA MCP 插件，或配置 `ida_mcp_start_command` 让 chatcli 自动启动 headless MCP 服务。
+2. 让 chatcli 先调用 `ida_mcp_ensure` 或 `ida_mcp_probe`，确认 endpoint 可连接并列出 MCP tools。
+3. 再用 `ida_mcp_call` 调指定 MCP tool，例如反编译函数、查询 xref、重命名符号等。
+
+`ida_mcp_ensure` 的行为是：先探测 `ida_mcp_url`，如果不可用且存在 `ida_mcp_start_command`，就后台执行启动命令，然后轮询 `tools/list` 直到 MCP endpoint 可用。GUI 插件型 IDA MCP 通常仍需要你先打开 IDA 或让插件自动加载；headless 服务型 MCP 更适合自动拉起。
+
+如果开启 `ida_mcp_auto_prepare: true`，chatcli 会在第一次模型调用前完成接入：探测/可选启动 endpoint，读取 MCP `tools/list`，并把每个具体 MCP tool 注册成模型可直接调用的 chatcli tool，例如 MCP 的 `decompile_function` 会暴露成类似 `ida_mcp_decompile_function` 的工具。这样后续模型不需要先问你怎么接入，想用时可以直接调。
+
+IDA MCP 工具默认在 `ask` 权限组，因为部分 MCP tool 可能修改 IDB，例如重命名、注释、patch 或数据库保存。
+
+## 其他逆向分析工具接入
+
+除 IDA 外，chatcli 还支持这些辅助分析入口：
+
+- `external_static_analyze`：运行已安装的 `capa`、`diec`、`floss`、`exiftool`。输出前会生成 `AI Evidence Summary`，优先提取 capability、packer、混淆字符串、行为线索。
+- `ghidra_probe` / `ghidra_analyze`：调用 Ghidra HeadlessAnalyzer，对本地二进制导出函数、imports、strings、候选函数和可选伪代码 JSON，可作为 IDA 的交叉验证。
+- `angr_triage`：调用 Python 包 `angr` 做轻量静态 triage，提取 loader 架构、imports、strings 和可选 CFGFast 函数候选。
+
+Ghidra 配置示例：
+
+```powershell
+$env:GHIDRA_HOME="D:\ghidra_11.3"
+# 或
+$env:GHIDRA_HEADLESS_PATH="D:\ghidra_11.3\support\analyzeHeadless.bat"
+```
+
+angr 是可选 Python 包，不会默认安装：
+
+```powershell
+py -3 -m pip install angr
+```
+
+推荐逆向分析顺序：
+
+1. `binary_inspect`
+2. `external_static_analyze`
+3. `ida_analyze` 或 `ghidra_analyze`
+4. `reverse_evidence_map`
+5. `ida_focus_decompile` / IDA MCP / `angr_triage` 做定点分析
+
+### 外部工具下载指引
+
+| 工具 | 用途 | 安装/下载 |
+| --- | --- | --- |
+| Ghidra | Headless 反编译、函数/xref/字符串交叉验证 | [GitHub Releases](https://github.com/NationalSecurityAgency/ghidra/releases) |
+| Detect It Easy / diec | 文件类型、编译器、packer/protector 识别 | [官网](https://detect-it-easy.github.io/) |
+| YARA | 规则扫描、样本分类 | [GitHub](https://github.com/VirusTotal/yara) |
+| UPX | UPX 壳解包 | [官网](https://upx.github.io/) / [GitHub](https://github.com/upx/upx) |
+| ExifTool | 元数据提取 | [官网](https://exiftool.org/) |
+| Wireshark / TShark | PCAP/网络流量分析 | [官网](https://www.wireshark.org/download.html) |
+| jadx | APK/DEX 反编译 | [GitHub](https://github.com/skylot/jadx) |
+| ILSpy / ilspycmd | .NET 反编译 | [GitHub Releases](https://github.com/icsharpcode/ILSpy/releases) |
+
+安装后确认对应命令能被 PATH 找到，例如 `diec`、`yara`、`upx`、`exiftool`、`tshark`、`jadx`、`ilspycmd`。Ghidra 可用 `GHIDRA_HOME` 或 `GHIDRA_HEADLESS_PATH` 配置。
+
+## IDA 内置辅助脚本
+
+项目还包含可直接在 IDA 里运行的 IDAPython 脚本，位置：
+
+```text
+chatcli/ida_scripts/
+```
+
+- `chatcli_ai_context.py`：导出适合 AI 分析的 IDA 上下文快照，包括当前函数、伪代码/反汇编、callers/callees、字符串、注释、imports 和候选函数评分。输出 JSON 和 Markdown。
+- `chatcli_ai_apply.py`：把经过人工确认的 AI 建议回写到 IDB，支持 rename、comment、color，执行前会确认。
+
+在 IDA 中使用：
+
+1. 打开目标数据库。
+2. `File -> Script file...`
+3. 选择 `chatcli/ida_scripts/chatcli_ai_context.py`
+4. 把导出的 JSON/Markdown 给 chatcli 分析。
+5. 如果需要回写命名/注释，生成建议 JSON 后用 `chatcli_ai_apply.py` 应用。
+
+可选环境变量：
+
+| 变量 | 作用 |
+| --- | --- |
+| `CHATCLI_IDA_EXPORT_DIR` | 指定 IDA context 导出目录 |
+| `CHATCLI_IDA_MAX_FUNCS` | 候选函数数量，默认 `80` |
+| `CHATCLI_IDA_MAX_STRINGS` | 导出字符串数量，默认 `400` |
+| `CHATCLI_IDA_INCLUDE_PSEUDOCODE` | 是否包含 Hex-Rays 伪代码，默认开启 |
+| `CHATCLI_IDA_MAX_DISASM` | 当前函数最多导出的反汇编行数 |
 
 ## 配置文件查找顺序
 

@@ -31,6 +31,11 @@ class AgentOutputMixin:
                 safe_args.append(a)
         try:
             self.console.print(*safe_args, markup=markup, **kwargs)
+            # On Windows, Rich buffers partial lines (no trailing \n) and
+            # won't flush until a newline arrives or the buffer fills.
+            # Explicit flush ensures streaming text appears immediately.
+            if kwargs.get("end", "\n") != "\n" or not args:
+                self.console.file.flush()
         except (UnicodeEncodeError, Exception):
             # Rich sometimes fails on markup or encoding; skip gracefully
             pass
@@ -38,7 +43,7 @@ class AgentOutputMixin:
     # ── Text buffering + wrapping ────────────────────────────────────
 
     _TEXT_FLUSH_BOUNDARIES = ["\n\n", "\n", ". ", "! ", "? ", ": ", "。", "！", "？", "："]
-    _TEXT_MAX_BUFFER = 200  # flush anyway if no natural boundary within this many chars
+    _TEXT_MAX_BUFFER = 100  # force-flush after this many chars even without a boundary
 
     def _wrap_long_lines(self, text: str) -> str:
         """Soft-wrap lines that exceed the terminal width, at word boundaries."""
@@ -73,17 +78,21 @@ class AgentOutputMixin:
         return "\n".join(lines)
 
     def _emit_text(self, text: str) -> None:
-        """Buffer streaming text and flush at natural break points."""
+        """Buffer streaming text; flush at sentence/paragraph boundaries.
+
+        Batches small token-chunks together for smooth console output,
+        but force-flushes after _TEXT_MAX_BUFFER chars to avoid long stalls.
+        """
         self._text_buffer += text
 
-        # Find the latest natural flush point
+        # Find the latest natural flush point (sentence / paragraph break)
         flush_at = -1
         for boundary in self._TEXT_FLUSH_BOUNDARIES:
             idx = self._text_buffer.rfind(boundary)
             if idx >= 0:
                 flush_at = max(flush_at, idx + len(boundary))
 
-        # Flush if buffer is large enough without any boundary
+        # No boundary found and buffer is getting large → force flush
         if flush_at < 0 and len(self._text_buffer) >= self._TEXT_MAX_BUFFER:
             flush_at = len(self._text_buffer)
 

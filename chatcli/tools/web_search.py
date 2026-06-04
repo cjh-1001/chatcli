@@ -9,7 +9,7 @@ import httpx
 import sys
 from html import unescape
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, coerce_int
 from ._http_utils import HEADERS, SEARCH_TIMEOUT, MAX_FILE_SIZE
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -334,7 +334,7 @@ class WebSearchTool(Tool):
         query = (query or "").strip()
         if not query:
             return ToolResult(content="Error: query cannot be empty.", is_error=True)
-        max_results = min(max(1, max_results), 20)
+        max_results = coerce_int(max_results, 10, minimum=1, maximum=20)
         backend = backend.lower()
 
         if backend == "auto":
