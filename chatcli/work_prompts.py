@@ -199,18 +199,45 @@ sandbox planning is relevant.
    continue with static triage or sandbox planning.
 9. Update `.chatcli/task.md` with concrete subtasks, checked-off evidence, open
    blockers, and next static steps.
-10. When complete, output a structured report with summary, identity, static
-   capabilities, IOCs, config extraction status, detection drafts, sandbox
-   observation plan, gaps, and say `TASK COMPLETE`.
-11. Final malware triage reports must be written in Simplified Chinese. Keep
-   technical terms such as SHA256, IOC, YARA, Sigma, C2, PE, ELF, API, and ATT&CK
-   in their standard form when that is clearer.
-12. Before saying `TASK COMPLETE`, save the final Chinese report as a standalone
-   HTML file under `.chatcli/reports/` using `write_file`. Use a filename like
-   `malware-triage-<task-id>.html`, include `<meta charset="utf-8">`, and make
-   the HTML self-contained so it can be opened directly in a browser. If tool
-   permission blocks the write, still output the Chinese report; chatcli will
-   export a fallback HTML report after completion.
+10. When complete, output a structured report that covers ALL of these sections
+   in Simplified Chinese (keep technical terms like SHA256, IOC, YARA, Sigma,
+   C2, PE, ELF, API, ATT&CK in standard form):
+   - **样本结论**: verdict, confidence, family, one-line impact summary
+   - **样本身份**: path, SHA256, MD5, file type, architecture, size, compile
+     time, sections, entropy, packer status
+   - **攻击行为链**: ordered steps with behavior → technique → evidence →
+     target/asset → impact → confidence → gaps for each step
+   - **关键能力分析**: persistence, C2, injection, credential access, defense
+     evasion, lateral movement, destructive behavior, security tool tampering
+   - **行为覆盖清单**: confirmed / likely / not observed / not analyzed per
+     major attack family
+   - **IOC 清单**: network IOCs, host IOCs, crypto/config IOCs, low-confidence
+     IOCs, IP lookup results
+   - **影响评估**: confidentiality, integrity, availability, persistence risk,
+     business exposure
+   - **检测与处置建议**: YARA rules, Sigma rules, EDR hunting points,
+     containment and eradication steps (中毒后处理手段)
+   - **静态分析限制**: packed areas, runtime-only behavior, missing evidence
+11. Final malware triage reports must be written in Simplified Chinese.
+12. Before saying `TASK COMPLETE`, generate the HTML report using the structured
+   template pipeline:
+   a. First, write the report as a JSON file conforming to the schema in
+      `chatcli/templates/malware_report.py` (see its docstring for the full
+      schema with Chinese field names). Save the JSON alongside the sample file
+      as `{sample_stem}_triage_report.json` (e.g. `1_triage_report.json` in the
+      same directory as `1.exe`). If the sample directory is unknown, use
+      `.chatcli/tmp/report_input.json` as fallback.
+   b. Then run the template renderer to produce the final HTML in the SAME
+      directory as the sample:
+      `python -m chatcli.templates.malware_report <json_path> <sample_dir>/<sample_stem>_triage_report.html`
+      Naming example: `C:\samples\1_triage_report.html` for `C:\samples\1.exe`.
+   c. If the JSON schema validation fails, fix the JSON and retry.
+   d. If the template renderer is unavailable, fall back to writing a
+      self-contained HTML file alongside the sample using `write_file`.
+      Include `<meta charset="utf-8">` and make it self-contained.
+   The template provides rich styling (dark/light mode, collapsible sections,
+   badges, card layout), so the JSON pipeline is strongly preferred.
+   **Output the report alongside the sample file, NOT under `.chatcli/reports/`.**
 13. **Iterative refinement**: do NOT produce a final report in your first
    response. Work in rounds — each round extracts one category of evidence
    (identity → strings → IOCs → config → capabilities → detection), reviews
@@ -248,6 +275,19 @@ sandbox planning is relevant.
    - [ ] `behavior_claim_validator` run on high/confirmed claims.
    - [ ] `behavior_coverage_matrix` run (if not run earlier).
    - [ ] At least one read of each completed child's record file.
+   - [ ] Every public IP has an `ip_lookup` result in the report.
+   - [ ] Every encoded/encrypted blob has a documented decoding attempt.
+   - [ ] Each persistence mechanism lists the exact registry key / task path / service name.
+   - [ ] Each ATT&CK mapping includes the technique ID and specific evidence match.
+   - [ ] Each behavior row follows: technique → evidence → target → impact → confidence.
+   - [ ] 应急响应处置 includes: 隔离遏制 → 清除根除 → 恢复验证 → 取证保留.
+   - [ ] Config extraction section shows decoded values OR documents why blocked.
+   - [ ] YARA rule uses 4+ sample-specific strings, not one generic match.
+18. **Depth is MANDATORY**: read `chatcli/skills/malware-triage/SKILL.md` sections
+   "Depth Requirements" and "Depth Checklist" before writing the final report.
+   Do not produce thin/template-like reports. Every claim must have depth:
+   explain HOW not just WHAT. The report must be actionable — a defender reading
+   it should know exactly what happened, how to detect it, and how to clean it.
 """
 
 MALWARE_CONTINUE_PROMPT = """\

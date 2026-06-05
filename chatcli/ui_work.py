@@ -354,6 +354,40 @@ class WorkCommandMixin:
         name = rest.split()[0] if rest.split() else rest
         return name[:100]
 
+    def _extract_sample_dir(self) -> str:
+        """Extract the directory containing the sample from the task description.
+
+        Returns the sample's parent directory if a full path was given,
+        otherwise falls back to the workspace root.
+        """
+        status = get_task_status(self.config.workspace) or {}
+        content = status.get("content", "")
+        if not content:
+            return str(Path(self.config.workspace))
+        first_line = content.splitlines()[0] if content.splitlines() else ""
+        prefix = "malware triage:"
+        lower_first = first_line.lower()
+        if prefix not in lower_first:
+            return str(Path(self.config.workspace))
+        rest = first_line[lower_first.index(prefix) + len(prefix):].strip()
+        # Try to extract a full path (Windows or Unix style)
+        m = re.search(
+            r"([A-Za-z]:[/\\][^\s]*?[/\\])?"  # Windows drive:\path\
+            r"([^\s]*?[/\\])"                   # any path/
+            r"[^/\s]+\.(?:exe|dll|sys|msi|bin|dat|elf|apk|jar|dex|scr|com|bat|"
+            r"cmd|ps1|vbs|js|wsf|hta|docm|xlsm|pptm|pdf|zip|rar|7z|tar|gz|cab|"
+            r"iso|img|dmp|raw|sct|lnk|tmp|swf)",
+            rest,
+            re.IGNORECASE,
+        )
+        if m:
+            # Reconstruct the directory path from the match
+            full_path = m.group(0)
+            parent = str(Path(full_path).parent.resolve())
+            if parent and Path(parent).exists():
+                return parent
+        return str(Path(self.config.workspace))
+
     def _collect_child_results(self) -> str:
         """Collect completed child-window results for injection into main context.
 
@@ -407,6 +441,7 @@ class WorkCommandMixin:
             return
         task_id = str(status.get("task_id") or "").strip()
         sample_name = self._extract_sample_name()
+        sample_dir = self._extract_sample_dir()
         try:
             path = export_html_report(
                 self.config.workspace,
@@ -414,6 +449,7 @@ class WorkCommandMixin:
                 "恶意样本静态分析报告",
                 report,
                 sample_name=sample_name,
+                sample_dir=sample_dir,
             )
             log_milestone(self.config.workspace, f"HTML report exported: {path}")
             self.console.print(f"[green]report[/] [dim]{path}[/]")
