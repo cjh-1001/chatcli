@@ -23,6 +23,7 @@ class AgentOutputMixin:
         Set markup=False for user/LLM text that may contain literal
         bracket sequences like [/something] or [U+XXXX].
         """
+        import sys
         safe_args = []
         for a in args:
             if isinstance(a, str):
@@ -31,11 +32,15 @@ class AgentOutputMixin:
                 safe_args.append(a)
         try:
             self.console.print(*safe_args, markup=markup, **kwargs)
-            # On Windows, Rich buffers partial lines (no trailing \n) and
-            # won't flush until a newline arrives or the buffer fills.
-            # Explicit flush ensures streaming text appears immediately.
-            if kwargs.get("end", "\n") != "\n" or not args:
-                self.console.file.flush()
+            # Flush Rich's buffer
+            self.console.file.flush()
+            # On Windows, also flush the underlying OS stdout — Rich's
+            # file.flush() may not propagate all the way to the console
+            # buffer, causing text to stall until a newline or user input.
+            try:
+                sys.stdout.flush()
+            except Exception:
+                pass
         except (UnicodeEncodeError, Exception):
             # Rich sometimes fails on markup or encoding; skip gracefully
             pass
@@ -43,7 +48,7 @@ class AgentOutputMixin:
     # ── Text buffering + wrapping ────────────────────────────────────
 
     _TEXT_FLUSH_BOUNDARIES = ["\n\n", "\n", ". ", "! ", "? ", ": ", "。", "！", "？", "："]
-    _TEXT_MAX_BUFFER = 100  # force-flush after this many chars even without a boundary
+    _TEXT_MAX_BUFFER = 30  # force-flush after this many chars (lower = smoother streaming on Windows)
 
     def _wrap_long_lines(self, text: str) -> str:
         """Soft-wrap lines that exceed the terminal width, at word boundaries."""

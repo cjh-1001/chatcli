@@ -1,9 +1,20 @@
 """Core agent loop — think → act → observe cycle."""
 
 import re as _re
+import sys
 import time
 from rich.console import Console
 from rich.panel import Panel
+
+# On Windows, force stdout to flush on every newline so streaming
+# model output appears immediately instead of stalling until the
+# user presses Enter.
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 from .config import Config
 from .tools import create_registry
