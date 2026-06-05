@@ -221,22 +221,65 @@ def _markdownish_to_html(text: str) -> str:
     return "\n".join(out)
 
 
-def export_html_report(workspace: str, task_id: str, title: str, content: str) -> Path:
-    """Persist a completed analysis report as a self-contained HTML file."""
+def _safe_sample_stem(name: str, max_len: int = 60) -> str:
+    """Extract a filesystem-safe stem from a sample filename.
+
+    Strips path separators, extensions, and unsafe characters.
+    Truncates to max_len chars (preferring suffix) when too long.
+    """
+    if not name:
+        return ""
+    # Take the last path component and strip extension(s)
+    base = name.replace("\\", "/").rstrip("/").split("/")[-1]
+    # Remove common double extensions: .exe.quarantine, .dll.dat, etc.
+    while "." in base:
+        root, ext = base.rsplit(".", 1)
+        if len(ext) > 6:  # not a real extension (e.g. long hash-like string)
+            break
+        base = root
+    # Remove unsafe chars
+    safe = re.sub(r"[^A-Za-z0-9一-鿿_.-]+", "-", base).strip(".-") or "sample"
+    if len(safe) <= max_len:
+        return safe
+    # Truncate: keep first 20 + "..." + last 37 chars
+    return safe[:20] + "-" + safe[-(max_len - 21):]
+
+
+def export_html_report(
+    workspace: str,
+    task_id: str,
+    title: str,
+    content: str,
+    sample_name: str = "",
+) -> Path:
+    """Persist a completed analysis report as a self-contained HTML file.
+
+    Filename format: {YYYYMMDD_HHMMSS}_{sample_stem}.html
+    Falls back to malware-triage-{task_id}.html when sample_name is empty.
+    """
     report_dir = Path(workspace) / ".chatcli" / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task_id or "").strip("-")
-    if not safe_task:
-        safe_task = datetime.now().strftime("%Y%m%d%H%M%S")
-    path = report_dir / f"malware-triage-{safe_task}.html"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = _safe_sample_stem(sample_name) if sample_name else ""
+    if stem:
+        path = report_dir / f"{stamp}_{stem}.html"
+    else:
+        safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task_id or "").strip("-")
+        if not safe_task:
+            safe_task = stamp
+        path = report_dir / f"malware-triage-{safe_task}.html"
     if path.exists():
         for idx in range(1, 100):
-            candidate = report_dir / f"malware-triage-{safe_task}-{idx}.html"
+            candidate = path.with_name(f"{path.stem}-{idx}{path.suffix}")
             if not candidate.exists():
                 path = candidate
                 break
+    # Strip completion markers and trailing noise from the report content
+    clean = (content or "").strip()
+    clean = re.sub(r"\n?\s*TASK\s*COMPLETE\s*$", "", clean, flags=re.IGNORECASE).strip()
+    clean = re.sub(r"\n?\s*PHASE\s*COMPLETE\s*$", "", clean, flags=re.IGNORECASE).strip()
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    body = _markdownish_to_html((content or "").strip())
+    body = _markdownish_to_html(clean)
     doc_title = html.escape(title or "恶意样本静态分析报告")
     html_text = f"""<!doctype html>
 <html lang="zh-CN">

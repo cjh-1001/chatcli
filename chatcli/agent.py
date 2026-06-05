@@ -140,6 +140,7 @@ The user's request follows below.
     # like "I should note that..." in the middle of a complete answer.
     _SELF_DIRECTION_RE = _re.compile(
         r"\b(?:"
+        # English self-direction
         r"I should(?!\s+(?:note|mention|point|clarify|emphasize|add|explain))|"
         r"I need to(?!\s+(?:note|mention|point|clarify|emphasize|add|explain))|"
         r"let me try|let me attempt|let me check|let me look|"
@@ -150,10 +151,33 @@ The user's request follows below.
         r")\b",
         _re.IGNORECASE,
     )
+    _SELF_DIRECTION_CN_RE = _re.compile(
+        r"(?:"
+        r"需要(?:进一步|继续|更多|额外|补充)|"
+        r"还需要|仍需|还要|"
+        r"下一步[：:要需]|下一阶段|"
+        r"尚未(?:完成|结束|提取|分析|解码|验证|确认)|"
+        r"没有(?:完成|结束|提取到|找到|发现)|"
+        r"未能|无法[一现]|还不[能够行]|"
+        r"继续(?:分析|提取|解码|验证|完善|补充|深入)"
+        r")"
+    )
 
     # Only scan the tail of the response — self-direction language at the
     # end strongly suggests the model is still trying to figure things out.
-    _SELF_DIRECTION_TAIL_CHARS = 400
+    _SELF_DIRECTION_TAIL_CHARS = 500
+
+    # Patterns that suggest a response is a complete/final report.
+    # When matched, skip self-correction to avoid false positives.
+    _COMPLETE_REPORT_RE = _re.compile(
+        r"(?:"
+        r"TASK\s*COMPLETE|"
+        r"(?:\b|^)(?:SHA256|MD5|SHA-256|文件哈希|样本身份)[：:\s]|"
+        r"(?:攻击行为链|IOC|威胁指标|检测与处置|分析限制|影响评估|"
+        r"attack.chain|key.capabilit|coverage|limitation)"
+        r")",
+        _re.IGNORECASE,
+    )
 
     # Detect unparsed tool call fragments that the provider couldn't handle.
     # If the raw response still contains <tool_call or <tool_calls, the
@@ -190,11 +214,24 @@ The user's request follows below.
         if self._UNPARSED_TOOL_RE.search(text):
             return True
 
+        # Guard: if the response looks like a complete structured report,
+        # skip self-correction. Long reports with many sections, IOCs,
+        # and detection rules are unlikely to be incomplete.
+        if len(text) > 2000 and self._COMPLETE_REPORT_RE.search(text):
+            return False
+
         # Check for self-direction language in the tail of the response.
         # Genuine self-correction phrases appear near the end; incidental
         # matches in a long complete answer are ignored.
         tail = text[-self._SELF_DIRECTION_TAIL_CHARS:]
         if self._SELF_DIRECTION_RE.search(tail):
+            return True
+
+        # Check Chinese self-direction patterns across the full text.
+        # Chinese reports are less likely to have English self-direction,
+        # so we scan more broadly for Chinese patterns.
+        cn_scan = text[-1000:] if len(text) > 1000 else text
+        if self._SELF_DIRECTION_CN_RE.search(cn_scan):
             return True
 
         return False

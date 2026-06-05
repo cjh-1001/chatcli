@@ -110,11 +110,27 @@ class ChildRecordMixin:
     ) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._children_lock:
+            # Cancel timeout timer if active
+            timer = getattr(child, "_timeout_timer", None)
+            if timer is not None:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+                child._timeout_timer = None
             child.result = result or ""
             child.error = error or ""
             child.status = status
             child.updated_at = now
-            child.completed_at = now
-            child.summary = self._summarize_child_locally(child)
+            if not child.completed_at:
+                child.completed_at = now
+            if status == "timeout":
+                prefix = child.summary or ""
+                child.summary = self._shorten_child_text(
+                    f"{prefix} (timeout after {getattr(child, 'timeout_seconds', 600):.0f}s)".strip(),
+                    420,
+                )
+            else:
+                child.summary = self._summarize_child_locally(child)
             self._write_child_record(child)
 

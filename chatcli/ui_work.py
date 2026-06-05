@@ -6,6 +6,7 @@ import re
 from rich.panel import Panel
 
 from .work_prompts import (
+    MALWARE_CONTINUE_PROMPT,
     MALWARE_TRIAGE_PROMPT,
     SECURITY_AUDIT_PROMPT,
     WORK_CONTINUE_PROMPT,
@@ -144,6 +145,14 @@ class WorkCommandMixin:
     def _start_malware_triage(self, ui: str):
         task_id = start_task(self.config.workspace, f"Malware triage: {ui}")
         self._set_agent_task_scope(task_id)
+        self._malware_review_done = False  # require self-review before completion
+        # Clean orphans from previous tasks to avoid context pollution
+        cleaned = self._cleanup_orphans(task_id)
+        running = self._running_child_count()
+        if cleaned or running:
+            self.console.print(
+                f"[dim]children: {running} running, {cleaned} stale cleaned[/]"
+            )
         self.console.print(Panel(
             "[bold magenta]MALWARE TRIAGE[/]\n"
             f"[dim]Scope: {ui}[/]\n"
@@ -316,6 +325,79 @@ class WorkCommandMixin:
             return recent
         return result or ""
 
+    def _extract_sample_name(self) -> str:
+        """Extract a readable sample name from the current malware task."""
+        status = get_task_status(self.config.workspace) or {}
+        content = status.get("content", "")
+        if not content:
+            return ""
+        first_line = content.splitlines()[0] if content.splitlines() else ""
+        # First line format: "# Task: Malware triage: <user_input>"
+        prefix = "malware triage:"
+        lower_first = first_line.lower()
+        if prefix not in lower_first:
+            return ""
+        rest = first_line[lower_first.index(prefix) + len(prefix):].strip()
+        if not rest:
+            return ""
+        # Prefer a filename with common sample extension
+        m = re.search(
+            r"([^/\s]+\.(?:exe|dll|sys|msi|bin|dat|elf|apk|jar|dex|scr|com|bat|"
+            r"cmd|ps1|vbs|js|wsf|hta|docm|xlsm|pptm|pdf|zip|rar|7z|tar|gz|cab|"
+            r"iso|img|dmp|raw|sct|lnk|tmp|swf))",
+            rest,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1)
+        # Fallback: take the first whitespace-delimited token
+        name = rest.split()[0] if rest.split() else rest
+        return name[:100]
+
+    def _collect_child_results(self) -> str:
+        """Collect completed child-window results for injection into main context.
+
+        Returns a compact summary of all completed children that the main
+        agent should incorporate before finalizing its report.
+        """
+        with self._children_lock:
+            children = list(self.children.values())
+        if not children:
+            return ""
+        active_task_id = self._current_task_id().strip()
+        relevant = [
+            c for c in children
+            if c.status in ("done", "blocked", "error")
+            and (not active_task_id or c.task_id == active_task_id)
+        ]
+        if not relevant:
+            return ""
+        parts = ["[Child window results — incorporate before TASK COMPLETE]"]
+        for child in relevant:
+            status_label = {"done": "✓", "blocked": "⊘", "error": "✗"}.get(child.status, child.status)
+            parts.append(f"\n## Child: {child.name} [{status_label}]")
+            parts.append(f"Task: {child.task}")
+            if child.summary:
+                parts.append(f"Summary: {child.summary}")
+            if child.result:
+                # Include the last 800 chars of the result for context
+                result_tail = child.result.strip()
+                if len(result_tail) > 800:
+                    result_tail = "…" + result_tail[-800:]
+                parts.append(f"Result:\n{result_tail}")
+            if child.error:
+                parts.append(f"Error: {child.error}")
+            notes_path = getattr(child, "notes_path", "") or str(
+                Path(self.config.workspace) / ".chatcli" / "children" / f"{child.name}.md"
+            )
+            parts.append(f"Full record: {notes_path}")
+        parts.append(
+            "\nRead the child record files if you need full details. "
+            "Merge all completed child findings into the main report before "
+            "saying TASK COMPLETE."
+        )
+        return "\n".join(parts)
+
     def _maybe_export_malware_report(self, result: str, history_start: int | None) -> None:
         if not self._is_malware_task():
             return
@@ -324,12 +406,14 @@ class WorkCommandMixin:
         if not report:
             return
         task_id = str(status.get("task_id") or "").strip()
+        sample_name = self._extract_sample_name()
         try:
             path = export_html_report(
                 self.config.workspace,
                 task_id,
                 "恶意样本静态分析报告",
                 report,
+                sample_name=sample_name,
             )
             log_milestone(self.config.workspace, f"HTML report exported: {path}")
             self.console.print(f"[green]report[/] [dim]{path}[/]")
@@ -338,27 +422,58 @@ class WorkCommandMixin:
 
     def _looks_like_final_triage_report(self, text: str) -> bool:
         lowered = (text or "").lower()
-        if "ioc" not in lowered:
+        # Require both "ioc" (English or Chinese context) and a minimum
+        # number of report section indicators to avoid false positives
+        # on partial outputs or tool results that happen to mention IOCs.
+        has_ioc_signal = (
+            "ioc" in lowered
+            or "威胁指标" in text
+            or "网络指标" in text
+        )
+        if not has_ioc_signal:
             return False
         hints = (
-            "样本身份",
-            "静态能力",
-            "配置提取",
-            "检测规则",
-            "沙箱观察",
-            "文件哈希",
-            "sha256",
-            "sha-256",
-            "md5",
-            "关键字符串",
-            "网络 ioc",
-            "主机 ioc",
-            "后续分析建议",
-            "结论",
-            "conclusion",
-            "recommendations",
+            # Chinese section headers
+            "样本身份", "静态能力", "配置提取", "检测规则", "沙箱观察",
+            "文件哈希", "关键字符串", "网络 ioc", "主机 ioc",
+            "后续分析建议", "分析限制", "攻击行为链", "影响评估",
+            "检测与处置", "处置建议", "覆盖清单", "行为覆盖",
+            # English section markers
+            "sha256", "sha-256", "md5",
+            "conclusion", "recommendations", "limitations",
+            "attack chain", "coverage", "key capabilities",
+            # Report structure markers
+            "executive summary", "摘要", "结论", "总结",
+            "yara", "sigma", "edr hunting", "sandbox",
+            # Confidence/verdict markers
+            "verdict", "判定", "置信度", "confidence",
         )
-        return sum(1 for hint in hints if hint in lowered) >= 5
+        return sum(1 for hint in hints if hint in lowered) >= 6
+
+    def _report_missing_network_iocs(self, text: str) -> bool:
+        """Return True if a malware report lacks network IOC coverage.
+
+        The report should either contain IPs/domains/URLs OR explicitly state
+        that no network IOCs were found. A report that just omits network
+        indicators is likely incomplete.
+        """
+        lowered = (text or "").lower()
+        # Explicitly states no network IOCs found — acceptable
+        if re.search(
+            r"(未发现|没有|无|no|未提取到|暂无)\s*(网络|network|C2\s*(IP|地址|通信|连接)|域名|domain|IOC|IP\s*(地址|信息))",
+            lowered,
+        ):
+            return False
+        # Has IPv4 pattern
+        if re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
+            return False
+        # Has domain-like pattern
+        if re.search(r"\b[a-z0-9][a-z0-9.-]{1,200}\.[a-z]{2,20}\b", lowered):
+            return False
+        # Has URL pattern
+        if re.search(r"https?://", lowered):
+            return False
+        return True
 
     def _has_completion_signal(self, text: str) -> bool:
         if TASK_COMPLETE_MARKER in (text or "").upper():
@@ -367,8 +482,18 @@ class WorkCommandMixin:
 
     def _is_work_complete(self, result: str, history_start: int | None = None) -> bool:
         if self._has_completion_signal(result or ""):
-            mark_task_done(self.config.workspace)
-            return True
+            # Don't accept completion if children are still running for this task
+            task_id = self._current_task_id()
+            running_children = [
+                c for c in self.children.values()
+                if c.status == "running"
+                and task_id and c.task_id == task_id
+            ]
+            if not running_children:
+                mark_task_done(self.config.workspace)
+                return True
+            # Children still running — tell the model to wait or read them
+            return False
         if self._has_completion_signal(self._recent_assistant_tool_text(history_start)):
             mark_task_done(self.config.workspace)
             return True
@@ -406,19 +531,10 @@ class WorkCommandMixin:
         return f"{state}"
     def _work_cycle_guidance(self, cycle: int) -> str:
         return (
-            "[Work-cycle planning rule]\n"
-            f"Cycle: {cycle}\n"
-            "- Begin by checking what changed since the previous cycle: task state, worklog, "
-            "tool outputs, cached JSON paths, and child-window summaries.\n"
-            "- Update `.chatcli/task.md` when the current evidence changes the plan. Keep a "
-            "short next-step queue instead of restarting broad analysis.\n"
-            "- Prefer existing artifacts first: cached IDA JSON, partial IDA checkpoints, "
-            "reverse_evidence_map summaries, child records, and verified offsets.\n"
-            "- If a slow IDA/deobfuscation job is running or timed out with partial results, "
-            "continue main-window work from lightweight triage and the partial evidence; "
-            "delegate only specific functions/ranges to child windows.\n"
-            "- End the cycle with a concrete state: completed phase, updated blocker, "
-            "spawned child task, or next targeted tool call. Do not repeat completed work."
+            f"[Cycle {cycle}]\n"
+            "- Check child summaries + task.md for what changed; don't repeat done work.\n"
+            "- Prefer cached JSON paths, child records, and existing tool outputs over re-running.\n"
+            "- One concrete action per cycle: extract, classify, validate, or write. End with next step."
         )
     def _print_work_cycle_header(self, cycle: int, max_cycles: int) -> None:
         self.console.print(
@@ -481,6 +597,52 @@ class WorkCommandMixin:
                 )
                 continue
             if self._is_work_complete(result, history_start):
+                # For malware tasks: require a self-review round before
+                # accepting completion. The model should check its own
+                # report for gaps, weak evidence, and unextracted artifacts
+                # before truly finishing.
+                if self._is_malware_task() and not self._malware_review_done:
+                    self._malware_review_done = True
+                    # Collect completed child results for the review
+                    child_results = self._collect_child_results()
+                    child_section = ""
+                    if child_results:
+                        self.console.print(
+                            "[yellow]self-review[/] "
+                            f"[dim]{sum(1 for c in self.children.values() if c.status in ('done','blocked','error'))} children done, checking gaps...[/]"
+                        )
+                        child_section = (
+                            "\n\n**Child window results**:\n"
+                            + child_results
+                            + "\n\nRead child record files with read_file for full details. "
+                            "Incorporate child findings into the report now.\n"
+                        )
+                    else:
+                        self.console.print(
+                            "[yellow]self-review[/] "
+                            "[dim]checking report for gaps before finish...[/]"
+                        )
+                    prompt = (
+                        "[Self-review — Quality Gate]\n"
+                        "You said TASK COMPLETE. Before finishing, run this checklist "
+                        "and fix any gaps:\n\n"
+                        "□ Unextracted: any undecoded strings/XOR/configs/IPs remaining?\n"
+                        "□ Weak evidence: any claim with only 1 import/generic string?\n"
+                        "□ IOC quality: `ioc_quality_classifier` run on all IOCs?\n"
+                        "□ Detection lint: `detection_rule_lint` run on YARA/Sigma?\n"
+                        "□ Claim validation: `behavior_claim_validator` run?\n"
+                        "□ Coverage: `behavior_coverage_matrix` run? 'not_observed' families resolvable?\n"
+                        "□ External tools: capa/FLOSS/DIE output fully incorporated?\n"
+                        "□ Children: all completed child records read and merged?\n"
+                        + (
+                            "\n**Completed child results**:\n" + child_results + "\n"
+                            if child_results else ""
+                        ) +
+                        "\nIf you find gaps: take concrete tool actions to fill them "
+                        "now. If every item is checked and the report is truly complete, "
+                        "say TASK COMPLETE with a brief confirmation.\n"
+                    )
+                    continue
                 self._maybe_export_malware_report(result, history_start)
                 self._set_agent_task_scope("")
                 self.console.print(
@@ -515,7 +677,39 @@ class WorkCommandMixin:
             self.console.print(
                 f"[dim]continue {cycle}/{max_cycles} | remaining {remaining} | {usage}[/]"
             )
-            prompt = WORK_CONTINUE_PROMPT
+            # Build continue prompt with child awareness for malware tasks
+            if self._is_malware_task():
+                running = [
+                    c for c in self.children.values()
+                    if c.status == "running"
+                    and (not task_id or c.task_id == task_id)
+                ]
+                completed_unreviewed = [
+                    c for c in self.children.values()
+                    if c.status in ("done", "blocked")
+                    and (not task_id or c.task_id == task_id)
+                ]
+                # Use the malware-specific continue prompt for faster iteration
+                base = MALWARE_CONTINUE_PROMPT
+                extra_parts = []
+                if running:
+                    names = ", ".join(c.name for c in running[:5])
+                    extra_parts.append(
+                        f"[Children running: {names} — do NOT duplicate their work]"
+                    )
+                if completed_unreviewed:
+                    names = ", ".join(
+                        f"{c.name} ({c.status})" for c in completed_unreviewed[:5]
+                    )
+                    extra_parts.append(
+                        f"[Children completed: {names} — read their records with read_file]"
+                    )
+                if extra_parts:
+                    prompt = base.rstrip() + "\n\n" + "\n".join(extra_parts)
+                else:
+                    prompt = base
+            else:
+                prompt = WORK_CONTINUE_PROMPT
         if loop_error:
             self.console.print(
                 f"[red]Aborted[/] [dim]after error in cycle {max_cycles} | "

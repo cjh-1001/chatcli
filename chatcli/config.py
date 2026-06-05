@@ -120,10 +120,10 @@ class Config:
     ida_mcp_tool_limit: int = 80
     auto_resume: bool = False
     auto_compress: bool = True
-    compress_threshold: int = 80000  # trigger compression when context exceeds this many tokens
+    compress_threshold: int = 120000  # trigger compression when context exceeds this many tokens (raised for malware analysis with large tool outputs)
     max_retries: int = 3             # retry failed API calls with backoff
     request_timeout: float = 120.0   # API request timeout in seconds
-    max_tool_output_chars: int = 40000  # max chars per tool result fed into history (prevents context blowup)
+    max_tool_output_chars: int = 80000  # max chars per tool result fed into history (prevents context blowup; 80k keeps IP/network sections intact for malware analysis)
     temp_script_dir: str = ".chatcli/tmp"
     temp_script_name: str = "scratch.py"
     enforce_temp_script_iteration: bool = True

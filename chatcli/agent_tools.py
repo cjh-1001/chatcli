@@ -98,7 +98,9 @@ class AgentToolMixin(AgentToolDisplayMixin):
                 f"or limit to specific directories.]"
             )
 
-        # For binary/reverse-analysis tools: keep header + first part.
+        # For binary/reverse-analysis tools: keep header + first part,
+        # PLUS extract security-critical lines (IPs, domains, hashes, APIs)
+        # from the truncated tail so they aren't lost.
         if name in (
             "binary_inspect",
             "ida_analyze",
@@ -113,10 +115,43 @@ class AgentToolMixin(AgentToolDisplayMixin):
             "encoded_string_extract",
             "obfuscated_data_map",
             "reverse_evidence_map",
+            "external_static_analyze",
         ):
             truncated = content[:limit]
+            # Extract priority lines from discarded tail
+            tail = content[limit:]
+            priority_lines: list[str] = []
+            import re as _re2
+            _priority_re = _re2.compile(
+                r"(?:\b(?:\d{1,3}\.){3}\d{1,3}\b|"
+                r"\b[a-z0-9][a-z0-9.-]{1,200}\.[a-z]{2,20}\b|"
+                r"\b[a-f0-9]{32,64}\b|"
+                r"\b(?:socket|connect|bind|listen|accept|"
+                r"WinHTTP?|WinInet|URLDownload|InternetOpen|"
+                r"CreateProcess|ShellExecute|RegSet|RegCreate|"
+                r"WriteProcessMemory|CreateRemoteThread|"
+                r"VirtualAlloc|NtCreate|NtWrite|XOR|RC4|AES|"
+                r"base64|decode|crypt|decrypt|powershell)"
+                r"\b)",
+                _re2.IGNORECASE,
+            )
+            for line in tail.splitlines():
+                if _priority_re.search(line):
+                    s = line.strip()
+                    if len(s) > 200:
+                        s = s[:197] + "..."
+                    priority_lines.append(s)
+                if len(priority_lines) >= 30:
+                    break
+            priority_section = ""
+            if priority_lines:
+                priority_section = (
+                    "\n\n[TAIL PRIORITY ({n} lines kept from {t} truncated chars)]:\n"
+                    .format(n=len(priority_lines), t=len(tail))
+                    + "\n".join(priority_lines)
+                )
             return (
-                f"{truncated}\n\n"
+                f"{truncated}{priority_section}\n\n"
                 f"[TRUNCATED: output was {len(content)} chars, "
                 f"showing first {limit}. Use targeted queries for "
                 f"specific sections/imports/strings.]"

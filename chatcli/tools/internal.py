@@ -10,10 +10,18 @@ from .base import Tool, ToolResult, coerce_bool
 class ChatcliAutoRequestTool(Tool):
     name = "chatcli_auto_request"
     description = (
-        "Request a main-window chatcli automation after the current model turn. "
-        "Use when auto mode is enabled and you need the CLI to spawn a child task, "
-        "record or apply a reusable skill improvement, or clear chat history after "
-        "the current turn. This records a structured request; the UI processes it."
+        "Queue a main-window automation to run after the current turn. "
+        "For malware/reverse analysis, use `request_type: child_task` to spawn "
+        "parallel child windows for independent subtasks. Examples:\n"
+        "- Decode XOR/base64 strings: {request_type:child_task, name:decode-strings, "
+        "task:'Extract and decode all encoded strings from <path>, list IPs/domains'}\n"
+        "- External tool scan: {request_type:child_task, name:capa-scan, "
+        "task:'Run external_static_analyze on <path> and summarize capa/FLOSS findings'}\n"
+        "- IDA deep-dive: {request_type:child_task, name:ida-focus, "
+        "task:'Run ida_analyze on <path> targeting function at 0xADDR'}\n"
+        "Children run in background; main window continues without waiting. "
+        "Use `request_type: skill_improvement` to record reusable lessons. "
+        "Use `request_type: history_clear` to clear context after archiving."
     )
     parameters = {
         "type": "object",

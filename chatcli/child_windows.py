@@ -2,11 +2,13 @@
 
 import copy
 from datetime import datetime
+import hashlib
 import io
 from pathlib import Path
 import re
 import shlex
 import threading
+import time
 
 from rich import box
 from rich.console import Console
@@ -16,7 +18,12 @@ from rich.table import Table
 from .agent import Agent
 from .auto_requests import AutoRequestMixin
 from .child_records import ChildRecordMixin
-from .child_state import ChildWindow
+from .child_state import (
+    ChildWindow,
+    COMPLETED_CHILD_TTL,
+    MAX_CONCURRENT_CHILDREN,
+    MAX_TOTAL_CHILDREN,
+)
 from .worklog import get_task_status
 
 
@@ -37,18 +44,86 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
     def _safe_child_name(self, name: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", (name or "").strip()).strip("-_")
         return cleaned[:40] or "child"
-    def _make_child(self, name: str, task_id: str | None = None) -> ChildWindow:
-        child_name = self._safe_child_name(name)
+    @staticmethod
+    def _task_fingerprint(task: str) -> str:
+        """Short hash of task text for deduplication."""
+        normalized = re.sub(r"\s+", " ", (task or "").strip().lower())
+        return hashlib.sha256(normalized.encode()).hexdigest()[:12]
+
+    def _cleanup_orphans(self, active_task_id: str) -> int:
+        """Remove completed children from old/stale task IDs. Returns count removed."""
         with self._children_lock:
+            stale = [
+                name for name, c in self.children.items()
+                if c.status in ("done", "blocked", "error", "timeout")
+                and c.task_id and active_task_id
+                and c.task_id != active_task_id
+            ]
+            # Also clean old completed children beyond TTL
+            now = time.time()
+            for name, c in list(self.children.items()):
+                if c.status in ("done", "blocked", "error", "timeout"):
+                    if c.started_at > 0 and (now - c.started_at) > COMPLETED_CHILD_TTL:
+                        if name not in stale:
+                            stale.append(name)
+            for name in stale:
+                del self.children[name]
+            return len(stale)
+
+    def _running_child_count(self) -> int:
+        with self._children_lock:
+            return sum(1 for c in self.children.values() if c.status == "running")
+
+    def _find_similar_child(self, task: str, task_id: str) -> ChildWindow | None:
+        """Check if a child with very similar task already exists (dedup)."""
+        fp = self._task_fingerprint(task)
+        with self._children_lock:
+            for child in self.children.values():
+                if child.task_hash == fp and child.task_id == task_id:
+                    return child
+                # Also check: same name + similar task prefix
+                if child.task_id == task_id:
+                    existing = re.sub(r"\s+", " ", (child.task or "").strip().lower())
+                    new = re.sub(r"\s+", " ", (task or "").strip().lower())
+                    if existing and new and (
+                        existing[:80] == new[:80] or existing in new or new in existing
+                    ):
+                        return child
+        return None
+
+    def _make_child(self, name: str, task_id: str | None = None, task: str = "") -> ChildWindow:
+        child_name = self._safe_child_name(name)
+        scoped_task_id = (task_id if task_id is not None else self._current_task_id()).strip()
+
+        # Clean orphans before creating
+        self._cleanup_orphans(scoped_task_id)
+
+        with self._children_lock:
+            # Dedup: if child with same name exists, return it
             if child_name in self.children:
-                raise ValueError(f"child already exists: {child_name}")
+                existing = self.children[child_name]
+                if existing.status == "running":
+                    raise ValueError(f"child already running: {child_name}")
+                # Reuse idle/completed child
+                return existing
+
+            # Enforce max total children
+            if len(self.children) >= MAX_TOTAL_CHILDREN:
+                # Remove oldest completed children
+                completed = sorted(
+                    [(n, c) for n, c in self.children.items()
+                     if c.status in ("done", "blocked", "error", "timeout")],
+                    key=lambda x: x[1].started_at or 0,
+                )
+                for old_name, _ in completed[:max(1, len(completed) - MAX_TOTAL_CHILDREN + 4)]:
+                    del self.children[old_name]
+
             buffer = io.StringIO()
             agent = Agent(copy.deepcopy(self.config))
             agent.console = Console(file=buffer, force_terminal=False, color_system=None, width=100)
             agent.auto_approve = self.agent.auto_approve
             agent.debug = self.agent.debug
             agent._session_name = f"child-{child_name}"
-            scoped_task_id = (task_id if task_id is not None else self._current_task_id()).strip()
             agent._chatcli_task_id = scoped_task_id
             agent._chatcli_agent_role = "child"
             agent._chatcli_child_name = child_name
@@ -60,6 +135,7 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
                 buffer=buffer,
                 task_id=scoped_task_id,
                 notes_path=str(self._child_notes_path(child_name)),
+                task_hash=self._task_fingerprint(task) if task else "",
             )
             self.children[child_name] = child
             return child
@@ -67,21 +143,82 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
         notes_path = Path(self.config.workspace) / ".chatcli" / "children" / f"{child.name}.md"
         return (
             f"[Child window: {child.name}]\n"
-            "You are running as an independent child analysis session under the main chatcli window.\n"
-            "Keep your own context. Do not rely on the main window to remember details.\n"
+            "You are an independent parallel analysis session. The main window "
+            "will continue its own work without waiting for you.\n"
             f"Task: {task}\n\n"
             "Rules:\n"
-            f"- Persist durable notes to `{notes_path}` when the task has findings worth keeping.\n"
-            "- Do not modify `.chatcli/task.md` or `.chatcli/worklog.md`; those belong to the main window.\n"
-            "- If this is reverse/exe analysis, use the reverse-audit skill: binary_inspect first, then IDA when useful, then explain evidence.\n"
-            "- If blocked, return a concise status and the exact blocker instead of looping.\n"
-            "- End with a compact result that the main window can summarize.\n"
-            "- Put one clear final marker in the last lines: CHILD COMPLETE, CHILD BLOCKED, or CHILD ERROR.\n"
+            f"- Write a thorough, self-contained result. The main window will only "
+            f"  see your final output, not your conversation history.\n"
+            f"- Persist key findings, file paths, hashes, offsets, decoded values, "
+            f"  and concrete evidence to `{notes_path}` so the main window can "
+            f"  read them later with the read_file tool.\n"
+            "- Do not modify `.chatcli/task.md` or `.chatcli/worklog.md`; those "
+            "  belong to the main window.\n"
+            "- For malware/reverse subtasks, use the malware-triage or reverse-audit "
+            "  skills as appropriate. Work methodically: inspect → extract → verify.\n"
+            "- If you hit a hard blocker, return CHILD BLOCKED with the exact reason "
+            "  so the main window can decide whether to retry or work around it.\n"
+            "- End with CHILD COMPLETE and a compact but complete result that "
+            "  includes: what you did, key evidence found, file paths written, "
+            "  confidence level, and any recommended next steps for the main window.\n"
         )
     def _run_child_task(self, child: ChildWindow, task: str) -> None:
+        # ── Dedup check ──
+        task_id = child.task_id or self._current_task_id()
+        similar = self._find_similar_child(task, task_id)
+        if similar is not None and similar is not child:
+            if similar.status == "running":
+                self.console.print(
+                    f"[dim]child dedup:[/] [cyan]{similar.name}[/] "
+ f"[dim]already running similar task, skipping {child.name}[/]"
+                )
+                return
+            if similar.status in ("done", "blocked", "error"):
+                self.console.print(
+                    f"[dim]child dedup:[/] [cyan]{similar.name}[/] "
+                    f"[dim]already completed similar task, reusing result[/]"
+                )
+                # Copy result from similar child
+                child.result = similar.result
+                child.summary = similar.summary
+                child.status = similar.status
+                child.notes_path = similar.notes_path
+                child.completed_at = similar.completed_at
+                child.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                child.task = task
+                self._write_child_record(child)
+                return
+
+        # ── Concurrency limit ──
+        running = self._running_child_count()
+        if running >= MAX_CONCURRENT_CHILDREN:
+            self.console.print(
+                f"[yellow]child queue:[/] [dim]{child.name} "
+                f"({running}/{MAX_CONCURRENT_CHILDREN} children running, queued)[/]"
+            )
+            # Queue by waiting briefly and retrying (up to 30s)
+            def queued_worker() -> None:
+                waited = 0
+                while self._running_child_count() >= MAX_CONCURRENT_CHILDREN and waited < 30:
+                    time.sleep(2.0)
+                    waited += 2
+                self._start_child_worker(child, task)
+            thread = threading.Thread(
+                target=queued_worker,
+                name=f"chatcli-child-{child.name}-queue",
+                daemon=True,
+            )
+            child.thread = thread
+            thread.start()
+            return
+
+        self._start_child_worker(child, task)
+
+    def _start_child_worker(self, child: ChildWindow, task: str) -> None:
+        """Actually start the child worker thread (called directly or from queue)."""
         with self._children_lock:
             if child.status == "running":
-                raise ValueError(f"child is already running: {child.name}")
+                return  # already started
             child.task_id = child.task_id or self._current_task_id()
             child.agent._chatcli_task_id = child.task_id
             child.status = "running"
@@ -90,18 +227,38 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             child.error = ""
             child.summary = ""
             child.completed_at = ""
+            child.started_at = time.monotonic()
             child.updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._write_child_record(child)
 
+        timeout = getattr(child, "timeout_seconds", 600.0)
+
         def worker() -> None:
+            # Start timeout timer
+            timed_out = False
+
+            def on_timeout() -> None:
+                nonlocal timed_out
+                timed_out = True
+
+            timer = threading.Timer(timeout, on_timeout)
+            child._timeout_timer = timer
+            timer.start()
+
             try:
                 result = child.agent.run(self._child_prompt(child, task))
+                timer.cancel()
+                if timed_out:
+                    return  # _mark_child_finished already called by timeout
                 self._mark_child_finished(child, "done", result=result or "")
                 self.console.print(
                     f"\n[green]child done[/] [cyan]{child.name}[/] "
                     f"[dim]{escape(child.summary)} | /child show {child.name}[/]"
                 )
             except Exception as e:
+                timer.cancel()
+                if timed_out:
+                    return
                 self._mark_child_finished(
                     child,
                     "error",
@@ -109,10 +266,14 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
                 )
                 self.console.print(
                     f"\n[red]child error[/] [cyan]{child.name}[/] "
-                    f"[dim]{escape(child.summary)} | /child show {child.name}[/]"
+                    f"[dim]{escape(str(e)[:120])} | /child show {child.name}[/]"
                 )
 
-        thread = threading.Thread(target=worker, name=f"chatcli-child-{child.name}", daemon=True)
+        thread = threading.Thread(
+            target=worker,
+            name=f"chatcli-child-{child.name}",
+            daemon=True,
+        )
         child.thread = thread
         thread.start()
     def _child_list(self):
@@ -219,19 +380,36 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             key=lambda c: c.updated_at or c.created_at,
             reverse=True,
         )[:max(1, limit)]
-        lines = ["[Child window status summary for main-loop planning]"]
-        for child in children:
-            summary = self._shorten_child_text(child.summary or "(no summary yet)", 260)
-            task = self._shorten_child_text(child.task or "", 140)
+        running = [c for c in children if c.status == "running"]
+        completed = [c for c in children if c.status in ("done", "blocked", "error")]
+        lines = ["[Child window status — use read_file to get full child results]"]
+        if running:
+            lines.append("## Still running (do NOT duplicate their work):")
+            for child in running:
+                task = self._shorten_child_text(child.task or "", 120)
+                lines.append(f"- {child.name}: {task}")
+        if completed:
+            lines.append("## Completed (read their records and merge findings):")
+            for child in completed:
+                status_mark = {"done": "✓", "blocked": "⊘", "error": "✗"}.get(child.status, child.status)
+                summary = self._shorten_child_text(child.summary or "(no summary)", 400)
+                notes = child.notes_path or f".chatcli/children/{child.name}.md"
+                task_short = self._shorten_child_text(child.task or "", 100)
+                lines.append(
+                    f"- [{status_mark}] {child.name}: {summary}\n"
+                    f"  record: {notes} | task: {task_short}"
+                )
+        if running:
             lines.append(
-                f"- {child.name}: status={child.status}; summary={summary}; "
-                f"record={child.notes_path or '(none)'}; task_id={child.task_id or '(none)'}; "
-                f"task={task}"
+                "Do not wait for running children; continue main-window work "
+                "and read their results in a later cycle."
             )
-        lines.append(
-            "Use completed child summaries to choose the next main-window step. "
-            "If a child is still running, do not duplicate its detailed work in the main context."
-        )
+        if completed:
+            lines.append(
+                "Use read_file on each child's record path to get full results "
+                "before finalizing the main report. Unmerged child findings are "
+                "a common cause of incomplete reports."
+            )
         return "\n".join(lines)
     @staticmethod
     def _compression_context(events: list[dict]) -> str:

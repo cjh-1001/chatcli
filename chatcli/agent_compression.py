@@ -1,7 +1,33 @@
 """Context compression support for Agent."""
 
 import json
+import re as _re
 from pathlib import Path
+
+# Patterns for extracting security-critical data from compressed content
+_PRIORITY_EXTRACT_RE = _re.compile(
+    r"(?:"
+    r"\b(?:\d{1,3}\.){3}\d{1,3}\b|"                         # IPv4
+    r"\b[a-f0-9]{32}\b|\b[a-f0-9]{40}\b|\b[a-f0-9]{64}\b|"    # MD5/SHA1/SHA256
+    r"\b[a-z0-9][a-z0-9.-]{1,200}\.[a-z]{2,20}\b|"            # domain
+    r"(?:HKCU|HKLM|HKCR|HKU|HKCC)\\\.+?(?:\s|$)|"             # registry path
+    r"C:?\\[^\s]{3,100}\.(?:exe|dll|sys|dat|tmp|bat|ps1)"    # Windows path
+    r")",
+    _re.IGNORECASE,
+)
+
+def _extract_priority_items(text: str, max_items: int = 30) -> list[str]:
+    """Extract security-relevant items from text for compression preservation."""
+    items: list[str] = []
+    seen = set()
+    for m in _PRIORITY_EXTRACT_RE.finditer(str(text)[:20000]):
+        item = m.group(0).strip()
+        if item and item not in seen:
+            seen.add(item)
+            items.append(item)
+            if len(items) >= max_items:
+                break
+    return items
 
 
 class CompressionMixin:
@@ -91,14 +117,19 @@ class CompressionMixin:
         return events
 
     def _build_summary(self, messages: list[dict]) -> str:
-        """Build a compression prompt and get a summary from the model."""
-        # Build a compact representation of the history to compress
+        """Build a compression prompt and get a summary from the model.
+
+        Preserves security-critical data (IPs, hashes, domains, decoded
+        strings, registry paths) that would otherwise be lost during
+        truncation.
+        """
+        # Collect all tool result text for priority extraction
+        all_tool_output = ""
         parts = []
         for m in messages:
             role = m.get("role", "?")
             content = m.get("content", "")
             if isinstance(content, list):
-                # Anthropic format: blocks
                 texts = []
                 for block in content:
                     if isinstance(block, dict):
@@ -107,27 +138,47 @@ class CompressionMixin:
                         elif "tool_use" in block:
                             texts.append(f"[tool: {block.get('name','?')}]")
                         elif "tool_result" in block:
-                            texts.append(f"[result: {str(block.get('content',''))[:100]}]")
+                            result_text = str(block.get("content", ""))
+                            all_tool_output += result_text + "\n"
+                            # Keep first 150 chars + priority items
+                            texts.append(f"[result: {result_text[:150]}]")
                 content = " ".join(texts)
             elif isinstance(content, str):
+                all_tool_output += content + "\n"
                 content = content[:300]
             parts.append(f"[{role}] {content}")
+
+        # Extract priority items from all tool outputs
+        priority_items = _extract_priority_items(all_tool_output, max_items=40)
+        priority_section = ""
+        if priority_items:
+            priority_section = (
+                "\n\n--- Security-critical data extracted from tool outputs ---\n"
+                + "\n".join(f"- {item}" for item in priority_items)
+                + "\n---\n"
+            )
 
         history_text = "\n".join(parts)
         if len(history_text) > 8000:
             history_text = history_text[:8000] + "\n... (truncated)"
+        history_text += priority_section
+
         durable_state = self._durable_state_for_compression()
 
         summary_prompt = (
-            "Summarize this conversation history. Include:\n"
-            "- Key decisions made and why\n"
-            "- Files modified and what changed\n"
-            "- Important findings or patterns\n"
-            "- Current task and progress\n"
-            "- Child-window results and record paths that should guide next steps\n"
-            "- User preferences or conventions noted\n\n"
-            "Be concise. This summary replaces the detailed history "
-            "to save context space.\n\n"
+            "Summarize this conversation history for a malware/security analysis "
+            "session. CRITICAL: preserve ALL extracted IOCs, IP addresses, domains, "
+            "file hashes (SHA256/MD5), decoded strings, API names, registry paths, "
+            "mutex names, and C2 indicators in the summary. These will be needed "
+            "for the final report.\n\n"
+            "Include:\n"
+            "- Extracted IOCs (IPs, domains, URLs, hashes, file paths)\n"
+            "- Decoded strings and config values (XOR keys, campaign IDs, C2 addresses)\n"
+            "- Key capability findings with evidence sources\n"
+            "- Current analysis phase and remaining tasks\n"
+            "- Child-window results and record paths\n"
+            "- Files modified and decisions made\n\n"
+            "Be concise but DO NOT drop concrete IOCs or evidence.\n\n"
             f"--- Conversation history ---\n{history_text}\n"
             f"--- Durable task/child state ---\n{durable_state}\n"
             "---\n\nSummary:"
@@ -207,18 +258,28 @@ class CompressionMixin:
         return "\n\n".join(parts) if parts else "(no durable task/child state found)"
 
     def _fallback_summary(self, history_text: str) -> str:
-        """Extract key facts when LLM summarization fails."""
+        """Extract key facts when LLM summarization fails.
+
+        Preserves security-critical data even in fallback mode.
+        """
         import re
-        facts = []
+        # Extract security data first
+        priority_items = _extract_priority_items(history_text, max_items=50)
+        facts = [f"[IOC/evidence preserved: {item}]" for item in priority_items[:30]]
+
+        # Extract decisions and actions
         for line in history_text.split("\n"):
             line = line.strip()
             if any(kw in line.lower() for kw in
                    ["decided", "changed", "modified", "created", "fixed",
-                    "important", "remember", "convention", "pattern"]):
+                    "important", "remember", "convention", "pattern",
+                    "extracted", "decoded", "found", "identified",
+                    "confirmed", "sha256", "sha-256", "md5", "xor",
+                    "c2", "ip:", "domain:", "url:", "mutex", "pipe"]):
                 facts.append(line[:200])
 
         if not facts:
-            facts = ["Conversation about code improvement and tool usage."]
+            facts = ["Conversation about security analysis and tool usage."]
 
         return (
             "[Compressed conversation summary]\n\n"

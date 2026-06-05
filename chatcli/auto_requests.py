@@ -140,13 +140,32 @@ class AutoRequestMixin:
             return
         try:
             clear_after = False
+            seen_fingerprints: set[str] = set()  # dedup within this batch
+            now_iso = datetime.now().isoformat(timespec="seconds")
+            stale_cutoff = datetime.now().replace(hour=0, minute=0, second=0).isoformat(timespec="seconds")  # older than today = stale
+
+            # ── Staleness & batch limit ──
+            # Drop events older than 24h, process at most 50 per cycle
+            max_batch = 50
+            processed = 0
+
             for raw in raw_lines:
+                if processed >= max_batch:
+                    deferred_lines.append(raw)
+                    continue
+
                 if not raw.strip():
                     continue
                 try:
                     event = json.loads(raw)
                 except Exception:
                     continue
+
+                # Drop stale events (older than 24h)
+                created = event.get("created_at", "")
+                if created and created < stale_cutoff:
+                    continue
+
                 event_task_id = str(event.get("task_id") or "").strip()
                 if event_task_id and active_task_id and event_task_id != active_task_id:
                     deferred_lines.append(raw)
@@ -154,19 +173,34 @@ class AutoRequestMixin:
                 if event_task_id and not active_task_id:
                     deferred_lines.append(raw)
                     continue
+
                 req_type = event.get("request_type", "")
                 reason = event.get("reason", "")
+
                 if req_type == "child_task":
                     task = event.get("task", "")
                     if not task:
                         continue
+                    # ── Dedup by task fingerprint ──
+                    from .child_windows import ChildWindowMixin
+                    fp = ChildWindowMixin._task_fingerprint(task)
+                    if fp in seen_fingerprints:
+                        continue
+                    seen_fingerprints.add(fp)
+
                     name = self._unique_child_name(event.get("name") or "auto-child")
-                    child = self._make_child(name, task_id=event_task_id or active_task_id)
+                    child = self._make_child(
+                        name,
+                        task_id=event_task_id or active_task_id,
+                        task=task,
+                    )
                     child.agent.auto_approve = True
                     self._run_child_task(child, task)
                     self.console.print(
                         f"[green]auto child[/] [cyan]{child.name}[/] [dim]{reason}[/]"
                     )
+                    processed += 1
+
                 elif req_type == "skill_improvement":
                     skill_name = event.get("skill_name", "") or "general"
                     note = event.get("note", "")
@@ -177,18 +211,21 @@ class AutoRequestMixin:
                     if event.get("apply"):
                         name = self._unique_child_name(f"skill-{skill_name}")
                         child = self._make_child(name, task_id=event_task_id or active_task_id)
-                        task = (
+                        task_text = (
                             f"Use the skill-creator workflow to improve skill `{skill_name}`. "
                             f"Reusable note: {note}. Reason: {reason}. Keep the edit concise, "
                             "do not add one-off details, preserve safety boundaries, and report changed files."
                         )
-                        self._run_child_task(child, task)
+                        self._run_child_task(child, task_text)
                         self.console.print(
                             f"[green]auto skill child[/] [cyan]{child.name}[/]"
                         )
+                        processed += 1
+
                 elif req_type == "history_clear":
                     clear_after = True
                     self.console.print(f"[yellow]history clear requested[/] [dim]{reason}[/]")
+                    processed += 1
             if clear_after:
                 self.agent.clear_history(archive=True)
         finally:

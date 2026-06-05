@@ -178,9 +178,19 @@ sandbox planning is relevant.
    more specific evidence. Use `attack_technique_planner` when capabilities are
    broad/noisy or when the next validation queue is unclear.
 6. If deeper function-level work is needed, hand off to the `reverse-audit`
-   workflow for targeted static reversing. Use child windows for slow IDA or
-   focused function/range analysis, and continue main-window triage from partial
-   evidence instead of stalling.
+   workflow for targeted static reversing.
+	6b. **Use child windows for parallel analysis**: for large or complex samples,
+	   spawn independent child analysis sessions to work on separate subtasks in
+	   parallel. Use the `chatcli_auto_request` tool with `request_type: child_task`.
+	   Examples of child-worthy tasks:
+	   - Extract and decode all strings/XOR blobs (child 1)
+	   - Run external static analyzers and parse their output (child 2)
+	   - Deep-dive a specific function or code section with IDA (child 3)
+	   - Extract config, crypto constants, and campaign metadata (child 4)
+	   - Draft YARA/Sigma rules from the findings (child 5)
+	   After spawning children, continue main-window triage from partial evidence
+	   without stalling. Use `/child summarize` to merge their findings back into
+	   the main analysis.
 7. Draft detections defensively: YARA strings/byte patterns, Sigma ideas, and
    ATT&CK-style mappings only when supported by evidence.
 8. Do not provide malware improvement, persistence/evasion implementation,
@@ -201,4 +211,61 @@ sandbox planning is relevant.
    the HTML self-contained so it can be opened directly in a browser. If tool
    permission blocks the write, still output the Chinese report; chatcli will
    export a fallback HTML report after completion.
+13. **Iterative refinement**: do NOT produce a final report in your first
+   response. Work in rounds — each round extracts one category of evidence
+   (identity → strings → IOCs → config → capabilities → detection), reviews
+   the cumulative findings, and only then decides whether to extract more or
+   produce the report. You will be given a self-review round before completion
+   to catch gaps. Keep going until every feasible static extraction has been
+   attempted and all claims are backed by concrete evidence.
+14. **Tool efficiency (speed)**:
+   - Prefer lightweight tools first: `binary_inspect` → `encoded_string_extract` →
+     `external_static_analyze` → `behavior_capability_map`. Only use `ida_analyze`
+     or `ghidra_analyze` when import/xref/function-level evidence is needed.
+   - Never re-run a tool if its output is already in the conversation history or
+     saved to a JSON file. Read the file or reference the existing output.
+   - When spawning children, delegate the SLOW tasks (IDA, Ghidra, angr) and
+     continue main-window work with fast tools.
+   - If `external_static_analyze` with capa/FLOSS takes >30s, spawn it as a child
+     and continue with string/IOC extraction in the main window.
+15. **Evidence citation (anti-hallucination)**:
+   - Every capability claim MUST cite: tool name, concrete output excerpt, and
+     file offset or API name when applicable.
+   - Format: `[证据] tool_name @ 0xOFFSET: "output excerpt" → conclusion`
+   - Never claim a behavior from an import alone without supporting code/data.
+   - If a string or IP cannot be decoded, say so explicitly; do not guess.
+16. **Confidence calibration**:
+   - `confirmed`: >=2 independent evidence sources (e.g. API call + decoded string
+     + xref chain), directly observable in static analysis.
+   - `high`: 2 evidence sources but one is indirect or needs small inference.
+   - `medium`: 1 concrete evidence source, likely correct but needs corroboration.
+   - `low`: weak signal only (single import, generic string, heuristic match).
+   - `hypothesis`: no direct static evidence; educated guess from context.
+   - `blocked`: packing/obfuscation/encryption prevents static analysis.
+17. **Quality gate — before TASK COMPLETE, verify**:
+   - [ ] `ioc_quality_classifier` run on extracted IOCs (demote weak ones).
+   - [ ] `detection_rule_lint` run on any YARA/Sigma/EDR drafts.
+   - [ ] `behavior_claim_validator` run on high/confirmed claims.
+   - [ ] `behavior_coverage_matrix` run (if not run earlier).
+   - [ ] At least one read of each completed child's record file.
 """
+
+MALWARE_CONTINUE_PROMPT = """\
+## MALWARE TRIAGE — Continue
+
+Read `.chatcli/task.md` for current state. Do NOT restart from scratch.
+Pick ONE concrete next action from this priority queue:
+
+1. **Extract** (if artifacts remain): decode strings/XOR/configs not yet decoded.
+2. **Classify** (if extraction done but capabilities not mapped): run
+   `behavior_capability_map` or `attack_chain_builder`.
+3. **Validate** (if claims exist but not verified): run `behavior_claim_validator`
+   or `ioc_quality_classifier` to check existing findings.
+4. **Detect** (if validation done): draft YARA/Sigma rules, run `detection_rule_lint`.
+5. **Report** (only if ALL above are complete): produce final report + TASK COMPLETE.
+
+**Speed rules**: do not re-run tools whose output is already in context. Read child
+records first if children have completed. If a slow tool is running in a child,
+do lightweight work in the main window instead of waiting.
+"""
+
