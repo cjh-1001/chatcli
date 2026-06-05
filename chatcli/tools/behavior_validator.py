@@ -9,29 +9,9 @@ from ._json_utils import load_json
 from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_str_list
 from .behavior_rules import CAPABILITY_RULES
-
-HIGH_IMPACT_CATEGORIES = {
-    "c2_network",
-    "c2_variants",
-    "rat_backdoor_control",
-    "process_injection",
-    "credential_access",
-    "browser_cloud_credentials",
-    "keylogging_capture",
-    "wallet_clipboard_hijack",
-    "exfiltration",
-    "lateral_movement",
-    "worm_propagation",
-    "impact",
-    "ransomware_anti_recovery",
-    "security_tool_tampering",
-    "rootkit_driver",
-    "bootkit_uefi",
-    "miner",
-    "ddos_bot_proxy",
-    "file_infector",
-    "supply_chain_update_abuse",
-}
+from .behavior_hierarchy import BEHAVIOR_FAMILIES, CATEGORY_TO_FAMILY
+from .attack_technique_rules import HIGH_IMPACT
+from .behavior_confidence import rank_confidence
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -40,17 +20,6 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
-
-
-def _confidence_rank(value: Any) -> int:
-    return {
-        "confirmed": 5,
-        "high": 4,
-        "medium": 3,
-        "low": 2,
-        "hypothesis": 1,
-        "blocked": 0,
-    }.get(str(value or "").strip().lower(), 0)
 
 
 def _collect(value: Any, caps: list[dict[str, Any]], chain: list[dict[str, Any]], audits: list[dict[str, Any]]) -> None:
@@ -114,7 +83,7 @@ def _validate_capabilities(capabilities: list[dict[str, Any]], issues: list[dict
                 {"category": category, "confidence": confidence},
                 "Downgrade to high/medium static capability or add concrete code/runtime evidence.",
             )
-        if _confidence_rank(confidence) >= 3 and not evidence:
+        if rank_confidence(confidence) >= rank_confidence("medium") and not evidence:
             _add_issue(
                 issues,
                 "high",
@@ -123,7 +92,7 @@ def _validate_capabilities(capabilities: list[dict[str, Any]], issues: list[dict
                 {"category": category, "confidence": confidence},
                 "Attach strings, imports, xrefs, pseudocode, config fields, runtime telemetry, or mark as hypothesis.",
             )
-        if category in HIGH_IMPACT_CATEGORIES and _confidence_rank(confidence) >= 3 and not gates:
+        if category in HIGH_IMPACT and rank_confidence(confidence) >= rank_confidence("medium") and not gates:
             _add_issue(
                 issues,
                 "medium",
@@ -143,7 +112,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
         gaps = str(step.get("gaps") or "").strip()
         gate_status = str(step.get("gate_status") or "")
 
-        if _confidence_rank(confidence) >= 4 and (not evidence or evidence.lower() == "no direct evidence snippet provided."):
+        if rank_confidence(confidence) >= rank_confidence("high") and (not evidence or evidence.lower() == "no direct evidence snippet provided."):
             _add_issue(
                 issues,
                 "high",
@@ -152,7 +121,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
                 {"step": step_no, "behavior": behavior, "confidence": confidence},
                 "Add concrete evidence or downgrade the step.",
             )
-        if gate_status == "needs_validation" and _confidence_rank(confidence) >= 4:
+        if gate_status == "needs_validation" and rank_confidence(confidence) >= rank_confidence("high"):
             severity = "high" if confidence.lower() == "confirmed" else "medium"
             _add_issue(
                 issues,
@@ -162,7 +131,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
                 {"step": step_no, "behavior": behavior, "confidence": confidence},
                 "Keep as likely/static capability until the required validation is satisfied.",
             )
-        if gaps and _confidence_rank(confidence) >= 5:
+        if gaps and rank_confidence(confidence) >= rank_confidence("confirmed"):
             _add_issue(
                 issues,
                 "medium",
@@ -178,7 +147,7 @@ def _validate_audits(audits: list[dict[str, Any]], issues: list[dict[str, Any]])
         for item in audit.get("unsupported_capabilities", []) or []:
             _add_issue(
                 issues,
-                "high" if _confidence_rank(item.get("confidence")) >= 3 else "medium",
+                "high" if rank_confidence(item.get("confidence")) >= rank_confidence("medium") else "medium",
                 "unsupported_capability",
                 f"Capability lacks evidence support in evidence graph: {short_text(item.get('label'))}.",
                 item,
@@ -187,14 +156,14 @@ def _validate_audits(audits: list[dict[str, Any]], issues: list[dict[str, Any]])
         for item in audit.get("unsupported_attack_steps", []) or []:
             _add_issue(
                 issues,
-                "high" if _confidence_rank(item.get("confidence")) >= 3 else "medium",
+                "high" if rank_confidence(item.get("confidence")) >= rank_confidence("medium") else "medium",
                 "unsupported_attack_step",
                 f"Attack step lacks evidence support in evidence graph: {short_text(item.get('label'))}.",
                 item,
                 "Add supporting evidence or downgrade/remove the step.",
             )
         for item in audit.get("validation_required", []) or []:
-            if _confidence_rank(item.get("confidence")) >= 4:
+            if rank_confidence(item.get("confidence")) >= rank_confidence("high"):
                 _add_issue(
                     issues,
                     "medium",
@@ -384,7 +353,7 @@ class BehaviorCoverageMatrixTool(Tool):
         for cap in caps:
             category = str(cap.get("category") or "unknown")
             current = by_category.get(category)
-            if current and _confidence_rank(current.get("confidence")) >= _confidence_rank(cap.get("confidence")):
+            if current and rank_confidence(current.get("confidence")) >= rank_confidence(cap.get("confidence")):
                 continue
             by_category[category] = cap
 
@@ -399,6 +368,8 @@ class BehaviorCoverageMatrixTool(Tool):
 
         for category, rule in CAPABILITY_RULES.items():
             label = str(rule.get("label") or category)
+            family = CATEGORY_TO_FAMILY.get(category, "uncategorized")
+            family_label = str(BEHAVIOR_FAMILIES.get(family, {}).get("label") or "未归类")
             cap = by_category.get(category)
             if category in analyzed_blockers or label in analyzed_blockers:
                 status = "not_analyzed"
@@ -420,6 +391,8 @@ class BehaviorCoverageMatrixTool(Tool):
             rows.append({
                 "category": category,
                 "label": label,
+                "analysis_family": family,
+                "family_label": family_label,
                 "status": status,
                 "confidence": confidence,
                 "evidence_count": evidence_count,
@@ -431,11 +404,15 @@ class BehaviorCoverageMatrixTool(Tool):
             if category in CAPABILITY_RULES:
                 continue
             label = str(cap.get("label") or category)
+            family = str(cap.get("analysis_family") or CATEGORY_TO_FAMILY.get(category, "uncategorized"))
+            family_label = str(cap.get("family_label") or BEHAVIOR_FAMILIES.get(family, {}).get("label") or "未归类")
             status = _coverage_status(cap)
             coverage[status].append(label)
             rows.append({
                 "category": category,
                 "label": label,
+                "analysis_family": family,
+                "family_label": family_label,
                 "status": status,
                 "confidence": str(cap.get("confidence") or "low"),
                 "evidence_count": len([x for x in _as_list(cap.get("evidence")) if str(x).strip()]),
@@ -443,6 +420,12 @@ class BehaviorCoverageMatrixTool(Tool):
             })
 
         counts = {key: len(value) for key, value in coverage.items()}
+        family_counts: dict[str, dict[str, int]] = {}
+        for row in rows:
+            family = str(row.get("analysis_family") or "uncategorized")
+            status = str(row.get("status") or "")
+            family_counts.setdefault(family, {})
+            family_counts[family][status] = family_counts[family].get(status, 0) + 1
         lines = [
             "# Behavior Coverage Matrix",
             "",
@@ -452,11 +435,16 @@ class BehaviorCoverageMatrixTool(Tool):
             "## Coverage Counts",
         ]
         lines.extend(f"- {key}: {value}" for key, value in counts.items())
+        lines.extend(["", "## Family Counts"])
+        for family, values in sorted(family_counts.items()):
+            label = str(BEHAVIOR_FAMILIES.get(family, {}).get("label") or "未归类")
+            summary = ", ".join(f"{key}={value}" for key, value in sorted(values.items()))
+            lines.append(f"- {label} ({family}): {summary}")
         lines.extend(["", "## Observed Or Blocked"])
         for row in rows:
             if row["status"] in {"confirmed", "likely", "low_confidence", "blocked"}:
                 lines.append(
-                    f"- {row['label']} ({row['category']}): {row['status']}, "
+                    f"- {row['family_label']} / {row['label']} ({row['category']}): {row['status']}, "
                     f"confidence={row['confidence']}, gate={row['gate_status']}, evidence={row['evidence_count']}"
                 )
         if warnings:
@@ -470,6 +458,10 @@ class BehaviorCoverageMatrixTool(Tool):
                 "coverage": coverage,
                 "rows": rows,
                 "counts": counts,
-                "report_hints": {"coverage": coverage},
+                "family_counts": family_counts,
+                "report_hints": {
+                    "coverage": coverage,
+                    "family_counts": family_counts,
+                },
             },
         )

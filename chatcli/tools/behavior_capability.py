@@ -11,6 +11,13 @@ from ._json_utils import MAX_JSON_SIZE
 from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .behavior_rules import BOUNDARY_TERMS, CAPABILITY_RULES, CLAIM_GATES, STRONG_CLUSTERS
+from .behavior_requirements import behavior_requirement_gaps, cap_confidence
+from .behavior_taxonomy import apply_overlap_suppression
+from .behavior_hierarchy import (
+    annotate_hierarchy,
+    apply_family_noise_reduction,
+    build_family_plan,
+)
 
 MAX_COLLECTED_STRINGS = 5000
 
@@ -68,6 +75,15 @@ def _source_weight(source: str, confidence: str) -> float:
     return max(0.5, base)
 
 
+def _discounted_source_weight(source: str, confidence: str, evidence_hits: int) -> float:
+    weight = _source_weight(source, confidence)
+    if evidence_hits <= 0:
+        return weight
+    if evidence_hits == 1:
+        return weight * 0.6
+    return weight * 0.35
+
+
 def _term_matches(term: str, text: str) -> bool:
     term_low = term.lower()
     if term_low in BOUNDARY_TERMS:
@@ -111,24 +127,25 @@ def _load_json_signals(path: Path) -> tuple[list[str], str | None]:
     return out, None
 
 
-def _confidence(category: str, matched_terms: set[str], score: float) -> tuple[str, str, str]:
+def _confidence(category: str, matched_terms: set[str], score: float, evidence_count: int) -> tuple[str, str, str]:
     strong = STRONG_CLUSTERS.get(category, set())
     strong_hits = matched_terms & strong
-    if len(strong_hits) >= 3 or score >= 4.0 or len(matched_terms) >= 5:
+    diverse_evidence = evidence_count >= 2
+    if score >= 4.0 or (diverse_evidence and (len(strong_hits) >= 3 or len(matched_terms) >= 5)):
         reason = (
             f"high because {len(matched_terms)} terms matched, score={round(score, 2)}, "
-            f"strong_hits={sorted(strong_hits)}"
+            f"evidence_count={evidence_count}, strong_hits={sorted(strong_hits)}"
         )
         return "high", "static capability", reason
     if len(strong_hits) >= 2 or score >= 2.5 or len(matched_terms) >= 3:
         reason = (
             f"medium because {len(matched_terms)} terms matched, score={round(score, 2)}, "
-            f"strong_hits={sorted(strong_hits)}"
+            f"evidence_count={evidence_count}, strong_hits={sorted(strong_hits)}"
         )
         return "medium", "static capability", reason
     reason = (
         f"low because only {len(matched_terms)} weak/static term(s) matched, "
-        f"score={round(score, 2)}, strong_hits={sorted(strong_hits)}"
+        f"score={round(score, 2)}, evidence_count={evidence_count}, strong_hits={sorted(strong_hits)}"
     )
     return "low", "hypothesis", reason
 
@@ -144,13 +161,17 @@ def _match_capabilities(signals: list[str], max_results: int) -> list[dict[str, 
         matched_terms: set[str] = set()
         evidence: list[str] = []
         evidence_sources: list[str] = []
+        evidence_hit_counts: dict[str, int] = {}
         score = 0.0
         for term in rule["terms"]:
             for original, low, source, confidence in lowered:
                 if _term_matches(term, low):
                     matched_terms.add(term)
-                    score += _source_weight(source, confidence)
                     snippet = short_text(original)
+                    evidence_key = snippet or original[:120]
+                    hits = evidence_hit_counts.get(evidence_key, 0)
+                    score += _discounted_source_weight(source, confidence, hits)
+                    evidence_hit_counts[evidence_key] = hits + 1
                     if snippet and snippet not in evidence:
                         evidence.append(snippet)
                         if source:
@@ -160,7 +181,21 @@ def _match_capabilities(signals: list[str], max_results: int) -> list[dict[str, 
             continue
         if len(matched_terms) < int(rule.get("min_terms", 1)):
             continue
-        confidence, claim_level, confidence_reason = _confidence(category, {x.lower() for x in matched_terms}, score)
+        matched_terms_low = {x.lower() for x in matched_terms}
+        confidence, claim_level, confidence_reason = _confidence(category, matched_terms_low, score, len(evidence))
+        requirement_gaps, confidence_cap = behavior_requirement_gaps(category, matched_terms_low)
+        if confidence_cap:
+            capped = cap_confidence(confidence, confidence_cap)
+            if capped != confidence:
+                confidence_reason += (
+                    f"; capped at {capped} because behavior composition is incomplete "
+                    f"({'; '.join(requirement_gaps)})"
+                )
+                confidence = capped
+            if confidence == "low":
+                claim_level = "hypothesis"
+        required_validation = list(rule["validation"])
+        required_validation.extend(requirement_gaps)
         capabilities.append({
             "category": category,
             "label": rule["label"],
@@ -172,12 +207,16 @@ def _match_capabilities(signals: list[str], max_results: int) -> list[dict[str, 
             "confidence_reason": confidence_reason,
             "score": round(score, 2),
             "claim_gate": CLAIM_GATES.get(category, []),
-            "required_validation": rule["validation"],
+            "required_validation": required_validation,
+            "behavior_composition_gaps": requirement_gaps,
         })
 
+    capabilities = apply_overlap_suppression(capabilities)
+    capabilities = annotate_hierarchy(capabilities)
+    capabilities = apply_family_noise_reduction(capabilities)
     rank = {"high": 3, "medium": 2, "low": 1}
     capabilities.sort(
-        key=lambda item: (rank.get(item["confidence"], 0), len(item["matched_terms"])),
+        key=lambda item: (rank.get(item["confidence"], 0), item.get("analysis_family", ""), len(item["matched_terms"])),
         reverse=True,
     )
     return capabilities[:max_results]
@@ -265,12 +304,22 @@ class BehaviorCapabilityMapTool(Tool):
                 lines.append(f"- Claim level: {item['claim_level']}")
                 lines.append(f"- Confidence reason: {item['confidence_reason']}")
                 lines.append(f"- Score: {item['score']}")
+                lines.append(f"- Analysis family: {item.get('family_label', '未归类')} ({item.get('analysis_family', 'uncategorized')})")
+                if item.get("family_description"):
+                    lines.append(f"- Family description: {item['family_description']}")
                 lines.append(f"- Matched terms: {', '.join(item['matched_terms'])}")
+                if item.get("overlap_suppressed_by"):
+                    lines.append(f"- Overlap suppressed by: {', '.join(item['overlap_suppressed_by'])}")
+                if item.get("family_suppressed_by"):
+                    lines.append(f"- Family noise suppressed by: {', '.join(item['family_suppressed_by'])}")
                 if item.get("evidence_sources"):
                     lines.append(f"- Evidence sources: {', '.join(item['evidence_sources'])}")
                 if item.get("claim_gate"):
                     lines.append("- Claim gate:")
                     lines.extend(f"  - {gate}" for gate in item["claim_gate"])
+                if item.get("family_validation"):
+                    lines.append("- Family validation path:")
+                    lines.extend(f"  - {step}" for step in item["family_validation"][:4])
                 lines.append("- Evidence:")
                 lines.extend(f"  - {short_text(ev)}" for ev in item["evidence"][:6])
                 lines.append("- Required validation:")
@@ -280,14 +329,19 @@ class BehaviorCapabilityMapTool(Tool):
             "key_capability_candidates": [
                 {
                     "category": item["label"],
+                    "analysis_family": item.get("analysis_family", "uncategorized"),
+                    "family_label": item.get("family_label", "未归类"),
                     "technique": ", ".join(item["matched_terms"]),
                     "evidence": "\n".join(f"- {ev}" for ev in item["evidence"][:6]),
                     "impact": "静态信号显示该类攻击行为能力候选；需结合代码路径或运行时证据确认影响。",
                     "confidence": item["confidence"],
                     "confidence_reason": item["confidence_reason"],
+                    "overlap_suppressed_by": item.get("overlap_suppressed_by", []),
+                    "family_suppressed_by": item.get("family_suppressed_by", []),
                 }
                 for item in capabilities
             ],
+            "analysis_plan": build_family_plan(capabilities),
             "coverage_candidates": {
                 "likely": [item["label"] for item in capabilities if item["confidence"] in {"high", "medium"}],
                 "low_confidence": [item["label"] for item in capabilities if item["confidence"] == "low"],
@@ -303,4 +357,3 @@ class BehaviorCapabilityMapTool(Tool):
                 "report_hints": report_hints,
             },
         )
-

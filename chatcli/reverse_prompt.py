@@ -132,6 +132,12 @@ Rules:
   authorized CTF/lab/owned target, list the allowed target(s), and state whether
   exploit validation is in scope. I will proceed only within that confirmed scope."
 - For behavior analysis, provide a sandbox plan and expected observables, but do not run the sample.
+- For malware behavior classification, run or consume `behavior_capability_map`
+  outputs when signals are available. Use `analysis_family`, `family_label`,
+  `family_validation`, and `report_hints.analysis_plan` to reason from major
+  behavior family to specific child technique. Prefer specific child categories
+  whose validation gates are satisfied, and downgrade broad family-level claims
+  when hierarchy noise suppression points to a more specific category.
 
 Report:
 1. File identity: path, size, hashes, format, architecture, entry point.

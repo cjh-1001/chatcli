@@ -9,6 +9,7 @@ from ._json_utils import load_json
 from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .attack_technique_rules import HIGH_IMPACT, TECHNIQUE_MAP
+from .behavior_confidence import lower_confidence, rank_confidence
 
 
 
@@ -67,13 +68,44 @@ def _validation_categories(audits: list[dict[str, Any]]) -> set[str]:
     return categories
 
 
-def _mapping_status(category: str, cap: dict[str, Any], unsupported: set[str], needs_validation: set[str]) -> tuple[str, str]:
+def _chain_category_state(attack_chain: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    state: dict[str, dict[str, Any]] = {}
+    for step in attack_chain:
+        raw = str(step.get("source_category") or "")
+        categories = [part.strip() for part in raw.split("+") if part.strip()]
+        if not categories:
+            continue
+        confidence = str(step.get("confidence") or "")
+        gate_status = str(step.get("gate_status") or "")
+        gaps = str(step.get("gaps") or "")
+        needs_validation = gate_status == "needs_validation" or "Dependency gap:" in gaps
+        for category in categories:
+            item = state.setdefault(category, {
+                "confidence": confidence or "low",
+                "needs_validation": False,
+            })
+            item["confidence"] = lower_confidence(str(item.get("confidence") or "low"), confidence or None)
+            item["needs_validation"] = bool(item.get("needs_validation")) or needs_validation
+    return state
+
+
+def _mapping_status(
+    category: str,
+    cap: dict[str, Any],
+    unsupported: set[str],
+    needs_validation: set[str],
+    chain_state: dict[str, dict[str, Any]],
+) -> tuple[str, str]:
     evidence = [x for x in _as_list(cap.get("evidence")) if str(x).strip()]
     if category in unsupported or not evidence:
         return "blocked", "mapping lacks direct supporting evidence"
-    if cap.get("claim_gate") or category in needs_validation:
+    chain = chain_state.get(category, {})
+    if cap.get("claim_gate") or category in needs_validation or chain.get("needs_validation"):
         return "needs_validation", "high-impact or gated behavior requires validation before confirmed ATT&CK mapping"
-    if str(cap.get("confidence") or "").lower() in {"low", "hypothesis"}:
+    chain_confidence = str(chain.get("confidence") or "")
+    if rank_confidence(cap.get("confidence")) <= rank_confidence("low") or (
+        chain_confidence and rank_confidence(chain_confidence) <= rank_confidence("low")
+    ):
         return "hypothesis", "low-confidence behavior candidate"
     return "candidate", "evidence-backed candidate mapping"
 
@@ -96,6 +128,7 @@ def _build_mappings(
     for step in attack_chain:
         raw = str(step.get("source_category") or "")
         chain_categories.update(part.strip() for part in raw.split("+") if part.strip())
+    chain_state = _chain_category_state(attack_chain)
 
     mappings: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
@@ -108,7 +141,8 @@ def _build_mappings(
                 "recommendation": "Keep as custom behavior category or add a reviewed mapping.",
             })
             continue
-        status, reason = _mapping_status(category, cap, unsupported, needs_validation)
+        status, reason = _mapping_status(category, cap, unsupported, needs_validation, chain_state)
+        confidence = lower_confidence(str(cap.get("confidence", "low")), chain_state.get(category, {}).get("confidence"))
         if status == "blocked":
             issues.append({
                 "severity": "high" if category in HIGH_IMPACT else "medium",
@@ -127,12 +161,14 @@ def _build_mappings(
             mappings.append({
                 "category": category,
                 "label": cap.get("label") or category,
+                "analysis_family": cap.get("analysis_family", ""),
+                "family_label": cap.get("family_label", ""),
                 "tactic": tactic,
                 "technique_id": technique_id,
                 "technique": technique,
                 "status": status,
                 "status_reason": reason,
-                "confidence": cap.get("confidence", "low"),
+                "confidence": confidence,
                 "matched_terms": cap.get("matched_terms", []),
                 "evidence": cap.get("evidence", [])[:6] if isinstance(cap.get("evidence"), list) else _as_list(cap.get("evidence"))[:6],
                 "in_attack_chain": category in chain_categories,
@@ -237,6 +273,7 @@ class AttackTechniqueMapperTool(Tool):
                 lines.extend([
                     "",
                     f"### {item['label']} -> {technique}",
+                    f"- Analysis family: {item.get('family_label') or item.get('analysis_family') or '未归类'}",
                     f"- Tactic: {item['tactic']}",
                     f"- Status: {item['status']} ({item['status_reason']})",
                     f"- Confidence: {item['confidence']}",
@@ -265,4 +302,3 @@ class AttackTechniqueMapperTool(Tool):
                 "report_hints": {"attack_technique_mappings": mappings},
             },
         )
-

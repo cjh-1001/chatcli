@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,22 @@ from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .command_capability_rules import COMMAND_RULES, ID_PATTERNS
 
 MAX_COLLECTED_STRINGS = 6000
+BOUNDARY_TERMS = {
+    "shell",
+    "install",
+    "uninstall",
+    "upload",
+    "download",
+    "token",
+    "wallet",
+    "plugin",
+    "module",
+    "proxy",
+    "socks",
+    "socks5",
+    "spam",
+    "ddos",
+}
 
 
 def _normalize_signal(item: Any) -> dict[str, str]:
@@ -110,6 +127,13 @@ def _extract_command_ids(text: str) -> list[str]:
     return ids
 
 
+def _term_matches(term: str, text: str) -> bool:
+    term_low = term.lower()
+    if term_low in BOUNDARY_TERMS:
+        return re.search(rf"(?<![a-z0-9]){re.escape(term_low)}(?![a-z0-9])", text) is not None
+    return term_low in text
+
+
 def _confidence(score: float, terms: set[str], command_ids: list[str]) -> tuple[str, str]:
     if score >= 4.0 or len(terms) >= 5 or (len(terms) >= 3 and command_ids):
         return "high", f"high because score={round(score, 2)}, terms={len(terms)}, command_ids={len(command_ids)}"
@@ -139,9 +163,8 @@ def _map_commands(signals: list[Any], max_commands: int) -> list[dict[str, Any]]
         local_ids: list[str] = []
         score = 0.0
         for term in rule["terms"]:
-            term_low = term.lower()
             for original, low, source, confidence_text in normalized:
-                if term_low not in low:
+                if not _term_matches(term, low):
                     continue
                 matched_terms.add(term)
                 score += _source_weight(source, confidence_text)
@@ -288,4 +311,3 @@ class CommandCapabilityMapTool(Tool):
                 "report_hints": report_hints,
             },
         )
-

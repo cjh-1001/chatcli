@@ -170,7 +170,12 @@ sandbox planning is relevant.
    - config/crypto values such as encoded blobs, campaign IDs, keys, salts,
      wallet strings, extension lists, sleep intervals, and mode flags.
 5. Classify capabilities only from evidence. Separate observed evidence from
-   hypotheses and mark weak/low-confidence indicators.
+   hypotheses and mark weak/low-confidence indicators. When using
+   `behavior_capability_map`, start from `report_hints.analysis_plan` and
+   group findings by `analysis_family`/`family_label` before refining into
+   specific child categories. Prefer child categories whose validation gates are
+   satisfied; keep broad family matches as context when they are suppressed by
+   more specific evidence.
 6. If deeper function-level work is needed, hand off to the `reverse-audit`
    workflow for targeted static reversing. Use child windows for slow IDA or
    focused function/range analysis, and continue main-window triage from partial
