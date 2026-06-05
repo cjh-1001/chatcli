@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, get_workspace
 
 
 def _run_git(args: list[str], cwd: str, timeout: int = 15) -> subprocess.CompletedProcess:
@@ -40,7 +40,7 @@ class GitStatusTool(Tool):
     }
 
     def execute(self, **kwargs) -> ToolResult:
-        workspace = str(Path(kwargs.get("workspace", ".")).resolve())
+        workspace = str(Path(get_workspace(kwargs)).resolve())
         root = _repo_root(workspace)
         if not root:
             return ToolResult(content="Error: not inside a Git repository.", is_error=True)
@@ -94,7 +94,7 @@ class GitDiffTool(Tool):
         self, path: str | None = None, staged: bool = False,
         max_chars: int = 50000, **kwargs
     ) -> ToolResult:
-        workspace = str(Path(kwargs.get("workspace", ".")).resolve())
+        workspace = str(Path(get_workspace(kwargs)).resolve())
         root = _repo_root(workspace)
         if not root:
             return ToolResult(content="Error: not inside a Git repository.", is_error=True)

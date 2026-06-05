@@ -5,13 +5,15 @@ import re
 
 from rich.panel import Panel
 
-from .worklog import (
+from .work_prompts import (
+    MALWARE_TRIAGE_PROMPT,
+    SECURITY_AUDIT_PROMPT,
     WORK_CONTINUE_PROMPT,
     WORK_IMPLEMENT_PROMPT,
     WORK_PLAN_PROMPT,
     WORK_PROMPT,
-    MALWARE_TRIAGE_PROMPT,
-    SECURITY_AUDIT_PROMPT,
+)
+from .worklog import (
     export_html_report,
     get_task_status,
     log_milestone,

@@ -1,6 +1,6 @@
 """Technique routing helper for reverse-engineering workflows."""
 
-from .base import Tool, ToolResult, coerce_int, coerce_str_list
+from ..base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
 ROUTES = [

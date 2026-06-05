@@ -21,15 +21,10 @@ dependencies = [
 # On platforms without pre-built wheels it needs a Rust toolchain to build.
 # Leave it out if you don't have Rust — chatcli falls back to a heuristic counter.
 tiktoken = ["tiktoken>=0.7.0"]
-angr = ["angr>=9.2.0"]
-frida = [
-    "frida>=16.0.0",
-    "frida-tools>=13.0.0",
-]
-flare = [
-    "flare-capa>=9.0.0",
-    "flare-floss>=3.1.0",
-]
+
+# Reverse-engineering Python packages (angr, frida, flare-capa, flare-floss).
+# These are intentionally separate from core deps — they're large and
+# unnecessary for normal coding/chat usage.
 reverse = [
     "angr>=9.2.0",
     "frida>=16.0.0",
@@ -37,6 +32,8 @@ reverse = [
     "flare-capa>=9.0.0",
     "flare-floss>=3.1.0",
 ]
+
+# Everything: core + tiktoken + reverse
 all = [
     "tiktoken>=0.7.0",
     "angr>=9.2.0",

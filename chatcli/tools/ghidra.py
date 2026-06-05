@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .base import Tool, ToolResult, coerce_bool, coerce_int
-from .ida import _default_ida_json_path, _load_reusable_json
+from ._ida_utils import _default_ida_json_path, _load_reusable_json
 from .reverse_text import short_text
 
 

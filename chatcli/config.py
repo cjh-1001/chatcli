@@ -38,7 +38,7 @@ DEFAULT_ASK_TOOLS = [
     "ida_focus_decompile", "ida_deobfuscate", "ida_mcp_ensure", "ida_mcp_probe",
     "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks", "external_static_analyze",
     "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
-    "chatcli_auto_request",
+    "malware_share_package", "chatcli_auto_request",
 ]
 BUILTIN_AUTO_TOOLS = (
     "ip_lookup", "json_extract", "ioc_quality_classifier", "detection_rule_lint",
@@ -53,7 +53,7 @@ BUILTIN_ASK_TOOLS = (
     "multi_edit", "ida_analyze", "ida_focus_decompile", "ida_deobfuscate",
     "ida_mcp_ensure", "ida_mcp_probe", "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks",
     "external_static_analyze", "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
-    "chatcli_auto_request",
+    "malware_share_package", "chatcli_auto_request",
 )
 CONFIG_FILENAMES = ("config.yaml", "config.yml")
 
@@ -334,92 +334,47 @@ class Config:
             cfg.permissions.sensitive = perm.get("sensitive", cfg.permissions.sensitive)
             cfg.permissions.path_rules = perm.get("path_rules", cfg.permissions.path_rules)
 
-        if "max_tool_rounds" in data:
-            cfg.max_tool_rounds = data["max_tool_rounds"]
-        if "self_correction" in data:
-            cfg.self_correction = data["self_correction"]
-        if "max_self_correction_rounds" in data:
-            cfg.max_self_correction_rounds = data["max_self_correction_rounds"]
-        if "max_work_cycles" in data:
-            cfg.max_work_cycles = data["max_work_cycles"]
-        if "smart_work" in data:
-            cfg.smart_work = data["smart_work"]
-        if "confirm_plan" in data:
-            cfg.confirm_plan = data["confirm_plan"]
-        if "show_diffs" in data:
-            cfg.show_diffs = data["show_diffs"]
-        if "max_diff_lines" in data:
-            cfg.max_diff_lines = data["max_diff_lines"]
-        if "tool_preview_lines" in data:
-            cfg.tool_preview_lines = data["tool_preview_lines"]
-        if "tool_preview_chars" in data:
-            cfg.tool_preview_chars = data["tool_preview_chars"]
-        if "search_backend" in data:
-            cfg.search_backend = data["search_backend"]
-        if "ida_path" in data:
-            cfg.ida_path = data["ida_path"]
-        if "ghidra_path" in data:
-            cfg.ghidra_path = data["ghidra_path"]
-        if "die_path" in data:
-            cfg.die_path = data["die_path"]
-        if "exiftool_path" in data:
-            cfg.exiftool_path = data["exiftool_path"]
-        if "upx_path" in data:
-            cfg.upx_path = data["upx_path"]
-        if "ida_mcp_url" in data:
-            cfg.ida_mcp_url = data["ida_mcp_url"]
-        if "ida_mcp_start_command" in data:
-            cfg.ida_mcp_start_command = data["ida_mcp_start_command"]
-        if "ida_mcp_auto_prepare" in data:
-            cfg.ida_mcp_auto_prepare = _bool_value(data["ida_mcp_auto_prepare"], cfg.ida_mcp_auto_prepare)
-        if "ida_mcp_auto_start" in data:
-            cfg.ida_mcp_auto_start = _bool_value(data["ida_mcp_auto_start"], cfg.ida_mcp_auto_start)
+        # ── Flat fields ──────────────────────────────────────────
+        for key in (
+            "max_tool_rounds", "self_correction", "max_self_correction_rounds",
+            "max_work_cycles", "smart_work", "confirm_plan", "show_diffs",
+            "max_diff_lines", "tool_preview_lines", "tool_preview_chars",
+            "search_backend", "ida_path", "ghidra_path", "die_path",
+            "exiftool_path", "upx_path", "ida_mcp_url", "ida_mcp_start_command",
+            "auto_resume", "auto_compress", "compress_threshold", "max_retries",
+            "temp_script_dir", "temp_script_name", "enforce_temp_script_iteration",
+            "workspace", "context_file",
+        ):
+            if key in data:
+                setattr(cfg, key, data[key])
+
+        for key in ("request_timeout",):
+            if key in data:
+                setattr(cfg, key, float(data[key]))
+        for key in ("max_tool_output_chars",):
+            if key in data:
+                setattr(cfg, key, int(data[key]))
+        for key in ("ida_mcp_auto_prepare", "ida_mcp_auto_start"):
+            if key in data:
+                setattr(cfg, key, _bool_value(data[key], getattr(cfg, key)))
         if "ida_mcp_tool_limit" in data:
             try:
                 cfg.ida_mcp_tool_limit = int(data["ida_mcp_tool_limit"])
             except (TypeError, ValueError):
                 pass
-        if "reverse" in data and isinstance(data["reverse"], dict):
-            cfg.ida_path = data["reverse"].get("ida_path", cfg.ida_path)
-            cfg.ghidra_path = data["reverse"].get("ghidra_path", cfg.ghidra_path)
-            cfg.die_path = data["reverse"].get("die_path", cfg.die_path)
-            cfg.exiftool_path = data["reverse"].get("exiftool_path", cfg.exiftool_path)
-            cfg.upx_path = data["reverse"].get("upx_path", cfg.upx_path)
-            cfg.ida_mcp_url = data["reverse"].get("ida_mcp_url", cfg.ida_mcp_url)
-            cfg.ida_mcp_start_command = data["reverse"].get(
-                "ida_mcp_start_command", cfg.ida_mcp_start_command
-            )
-            cfg.ida_mcp_auto_prepare = _bool_value(
-                data["reverse"].get("ida_mcp_auto_prepare"), cfg.ida_mcp_auto_prepare
-            )
-            cfg.ida_mcp_auto_start = _bool_value(
-                data["reverse"].get("ida_mcp_auto_start"), cfg.ida_mcp_auto_start
-            )
-            try:
-                cfg.ida_mcp_tool_limit = int(
-                    data["reverse"].get("ida_mcp_tool_limit", cfg.ida_mcp_tool_limit)
-                )
-            except (TypeError, ValueError):
-                pass
-        if "auto_resume" in data:
-            cfg.auto_resume = data["auto_resume"]
-        if "auto_compress" in data:
-            cfg.auto_compress = data["auto_compress"]
-        if "compress_threshold" in data:
-            cfg.compress_threshold = data["compress_threshold"]
-        if "max_retries" in data:
-            cfg.max_retries = data["max_retries"]
-        if "request_timeout" in data:
-            cfg.request_timeout = float(data["request_timeout"])
-        if "max_tool_output_chars" in data:
-            cfg.max_tool_output_chars = int(data["max_tool_output_chars"])
-        if "temp_script_dir" in data:
-            cfg.temp_script_dir = data["temp_script_dir"]
-        if "temp_script_name" in data:
-            cfg.temp_script_name = data["temp_script_name"]
-        if "enforce_temp_script_iteration" in data:
-            cfg.enforce_temp_script_iteration = data["enforce_temp_script_iteration"]
-        if "workspace" in data:
-            cfg.workspace = data["workspace"]
-        if "context_file" in data:
-            cfg.context_file = data["context_file"]
+
+        # ── Legacy ``reverse:`` sub-section ───────────────────────
+        reverse = data.get("reverse")
+        if isinstance(reverse, dict):
+            for key in ("ida_path", "ghidra_path", "die_path", "exiftool_path",
+                        "upx_path", "ida_mcp_url", "ida_mcp_start_command"):
+                if key in reverse:
+                    setattr(cfg, key, reverse[key])
+            for key in ("ida_mcp_auto_prepare", "ida_mcp_auto_start"):
+                if key in reverse:
+                    setattr(cfg, key, _bool_value(reverse[key], getattr(cfg, key)))
+            if "ida_mcp_tool_limit" in reverse:
+                try:
+                    cfg.ida_mcp_tool_limit = int(reverse["ida_mcp_tool_limit"])
+                except (TypeError, ValueError):
+                    pass

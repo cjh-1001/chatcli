@@ -2,7 +2,7 @@
 
 import fnmatch
 from pathlib import Path
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, get_workspace
 from ..checkpoint import backup_file
 from ._http_utils import MAX_FILE_SIZE
 
@@ -70,7 +70,7 @@ class WriteTool(Tool):
                 is_error=True,
             )
         path = Path(file_path)
-        policy_error = self._temp_script_policy_error(path, kwargs.get("workspace", "."))
+        policy_error = self._temp_script_policy_error(path, get_workspace(kwargs))
         if policy_error:
             return ToolResult(content=policy_error, is_error=True)
         was_existing = path.exists()

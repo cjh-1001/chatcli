@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from datetime import datetime
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, get_workspace
 
 
 class ListDirTool(Tool):
@@ -20,7 +20,7 @@ class ListDirTool(Tool):
     }
 
     def execute(self, path: str | None = None, **kwargs) -> ToolResult:
-        workspace = kwargs.get("workspace", ".")
+        workspace = get_workspace(kwargs)
         target = Path(path) if path else Path(workspace)
 
         if not target.exists():

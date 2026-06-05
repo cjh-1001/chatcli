@@ -9,7 +9,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from .base import Tool, ToolResult, coerce_bool, coerce_str_list
-from .ida import _find_ida
+from ._ida_utils import _find_ida
 from .ghidra import _find_ghidra
 
 
@@ -43,6 +43,7 @@ BUILT_IN_TOOLS = {
     "behavior_coverage_matrix",
     "command_capability_map",
     "attack_technique_mapper",
+    "malware_share_package",
     "reverse_technique_map",
     "reverse_evidence_map",
     "runtime_string_hooks",

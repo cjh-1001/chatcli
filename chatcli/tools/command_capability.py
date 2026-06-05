@@ -6,18 +6,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import MAX_JSON_SIZE
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .command_capability_rules import COMMAND_RULES, ID_PATTERNS
 
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
 MAX_COLLECTED_STRINGS = 6000
-
-
-def _short(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _normalize_signal(item: Any) -> dict[str, str]:
@@ -94,7 +88,7 @@ def _load_json_signals(path: Path) -> tuple[list[Any], str | None]:
     if path.is_dir():
         return [], f"path is a directory, not JSON: {path}"
     size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
+    if size > MAX_JSON_SIZE:
         return [], f"JSON file too large for command capability map ({size} bytes): {path}"
     try:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -110,7 +104,7 @@ def _extract_command_ids(text: str) -> list[str]:
     for pattern in ID_PATTERNS:
         for match in pattern.finditer(text):
             value = match.group(1) if match.groups() else match.group(0)
-            value = _short(value, 80)
+            value = short_text(value, 80)
             if value and value not in ids:
                 ids.append(value)
     return ids
@@ -151,7 +145,7 @@ def _map_commands(signals: list[Any], max_commands: int) -> list[dict[str, Any]]
                     continue
                 matched_terms.add(term)
                 score += _source_weight(source, confidence_text)
-                snippet = _short(original)
+                snippet = short_text(original)
                 if snippet not in evidence:
                     evidence.append(snippet)
                 if source and source not in evidence_sources:
@@ -264,7 +258,7 @@ class CommandCapabilityMapTool(Tool):
                     f"- Impact: {item['impact']}",
                     "- Evidence:",
                 ])
-                lines.extend(f"  - {_short(ev)}" for ev in item["evidence"][:6])
+                lines.extend(f"  - {short_text(ev)}" for ev in item["evidence"][:6])
                 lines.extend([
                     "- Required validation:",
                     f"  - {item['required_validation'][0]}",

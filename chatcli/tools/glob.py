@@ -1,7 +1,7 @@
 """File pattern matching tool."""
 
 from pathlib import Path
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, get_workspace
 
 
 class GlobTool(Tool):
@@ -25,7 +25,7 @@ class GlobTool(Tool):
     def execute(self, pattern: str, path: str | None = None, **kwargs) -> ToolResult:
         if not pattern or not pattern.strip():
             return ToolResult(content="Error: pattern cannot be empty.", is_error=True)
-        workspace = kwargs.get("workspace", ".")
+        workspace = get_workspace(kwargs)
         base = Path(path) if path else Path(workspace)
         if not base.exists():
             return ToolResult(content=f"Directory not found: {base}", is_error=True)

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
-import json
 import re
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
-
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
 MAX_IOCS = 5000
 
 URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
@@ -30,27 +29,6 @@ NOISE_DOMAINS = {
 }
 NOISE_SUFFIXES = (".local", ".localhost", ".invalid", ".example", ".test")
 GENERIC_FILENAMES = {"readme.txt", "license.txt", "debug.log", "test.txt", "sample.txt"}
-
-
-def _short(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
-
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for IOC quality classification ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _source_strength(source: str, context: str, confidence: str) -> int:
@@ -273,7 +251,7 @@ class IocQualityClassifierTool(Tool):
                 collected.extend(extracted or [item])
 
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="IOC quality")
             if error:
                 warnings.append(error)
                 continue

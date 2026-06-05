@@ -17,6 +17,7 @@ COMMAND_DEFS = [
     ("Analyze", "/crack <exe> [goal]", "Shortcut for crackme validation audit"),
     ("Analyze", "/patch <exe> [goal]", "Shortcut for binary patch audit"),
     ("Analyze", "/malware <exe> [goal]", "Shortcut for static behavior triage plan"),
+    ("Analyze", "/malware-share [sample] [--report path] [--include-sample]", "Create a defensive sample-sharing package"),
     ("Session", "/plan <task>", "Explore and produce a plan"),
     ("Session", "/session", "Open session picker"),
     ("Session", "/resume", "Open session picker"),
@@ -131,6 +132,13 @@ SUBCOMMANDS = {
         ("--crackme", "Optional hint: CTF/crackme validation logic"),
         ("--patch", "Optional hint: audit and optionally create a patched copy"),
         ("--behavior", "Optional hint: sandbox behavior-analysis plan"),
+    ],
+    "/malware-share": [
+        ("--report", "Include a specific report file"),
+        ("--output-dir", "Write package to a specific directory"),
+        ("--include-sample", "Include sample bytes as a quarantine artifact"),
+        ("--no-redact-paths", "Do not redact local user paths in text artifacts"),
+        ("--no-redact-secrets", "Do not redact obvious secrets in text artifacts"),
     ],
 }
 

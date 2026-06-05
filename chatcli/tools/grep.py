@@ -3,7 +3,7 @@
 import fnmatch
 import re
 from pathlib import Path
-from .base import Tool, ToolResult, coerce_bool, coerce_int
+from .base import Tool, ToolResult, get_workspace, coerce_bool, coerce_int
 
 
 class GrepTool(Tool):
@@ -100,7 +100,7 @@ class GrepTool(Tool):
         if not pattern or not pattern.strip():
             return ToolResult(content="Error: pattern cannot be empty.", is_error=True)
         head_limit = coerce_int(head_limit, 250, minimum=1, maximum=10000)
-        workspace = kwargs.get("workspace", ".")
+        workspace = get_workspace(kwargs)
         base = Path(path) if path else Path(workspace)
 
         if not base.exists():

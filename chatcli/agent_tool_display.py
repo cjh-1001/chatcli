@@ -7,129 +7,95 @@ from .agent_tool_preview import AgentToolPreviewMixin
 from .agent_tool_summary import AgentToolSummaryMixin
 
 
+# Shared tool metadata: name → (label, icon, color)
+_TOOL_META = {
+    "read_file":             ("Read",             ">", "cyan"),
+    "glob":                  ("Glob",             ">", "cyan"),
+    "grep":                  ("Search",           ">", "cyan"),
+    "list_dir":              ("List",             ">", "cyan"),
+    "write_file":            ("Write",            ">", "yellow"),
+    "edit_file":             ("Edit",             ">", "yellow"),
+    "multi_edit":            ("Edit",             ">", "yellow"),
+    "bash":                  ("Run",              ">", "green"),
+    "git_status":            ("Git status",       ">", "cyan"),
+    "git_diff":              ("Git diff",         ">", "cyan"),
+    "binary_inspect":        ("Inspect binary",   ">", "cyan"),
+    "binary_find":           ("Find bytes",       ">", "magenta"),
+    "binary_hexdump":        ("Hexdump",          ">", "magenta"),
+    "ida_probe":             ("IDA probe",        ">", "magenta"),
+    "ida_analyze":           ("IDA analyze",      ">", "magenta"),
+    "ida_focus_decompile":   ("IDA focus",        ">", "magenta"),
+    "ida_deobfuscate":       ("IDA deobf",        ">", "magenta"),
+    "ida_mcp_ensure":        ("IDA MCP ensure",   ">", "magenta"),
+    "ida_mcp_probe":         ("IDA MCP probe",    ">", "magenta"),
+    "ida_mcp_list_tools":    ("IDA MCP tools",    ">", "magenta"),
+    "ida_mcp_call":          ("IDA MCP call",     ">", "magenta"),
+    "encoded_string_extract":("Extract strings",  ">", "magenta"),
+    "obfuscated_data_map":   ("Map data",         ">", "magenta"),
+    "reverse_technique_map": ("Plan route",       ">", "magenta"),
+    "reverse_evidence_map":  ("Map evidence",     ">", "magenta"),
+    "runtime_string_hooks":  ("Generate hooks",   ">", "magenta"),
+    "external_static_analyze":("External scan",   ">", "magenta"),
+    "ghidra_probe":          ("Ghidra probe",     ">", "magenta"),
+    "ghidra_analyze":        ("Ghidra analyze",   ">", "magenta"),
+    "angr_triage":           ("angr triage",      ">", "magenta"),
+    "yara_scan":             ("YARA",             ">", "magenta"),
+    "upx_unpack":            ("UPX",              ">", "yellow"),
+    "tool_health_check":     ("Tool check",       ">", "cyan"),
+    "web_search":            ("Web search",       ">", "magenta"),
+    "web_fetch":             ("Fetch",            ">", "magenta"),
+}
+
+# Tool → primary parameter key shown in the one-line display
+_PRIMARY_PARAM = {
+    "bash": "command", "read_file": "file_path",
+    "write_file": "file_path", "edit_file": "file_path",
+    "multi_edit": "file_path",
+    "glob": "pattern", "grep": "pattern", "list_dir": "path",
+    "web_search": "query", "web_fetch": "url",
+    "git_diff": "path",
+    "binary_inspect": "file_path", "binary_find": "file_path",
+    "binary_hexdump": "file_path", "ida_probe": "ida_path",
+    "ida_analyze": "file_path",
+    "ida_focus_decompile": "targets",
+    "ida_deobfuscate": "file_path",
+    "ida_mcp_ensure": "mcp_url",
+    "ida_mcp_probe": "mcp_url",
+    "ida_mcp_list_tools": "mcp_url",
+    "ida_mcp_call": "tool_name",
+    "encoded_string_extract": "file_path",
+    "obfuscated_data_map": "file_path",
+    "reverse_technique_map": "goal",
+    "reverse_evidence_map": "json_paths",
+    "runtime_string_hooks": "output_dir",
+    "external_static_analyze": "file_path",
+    "ghidra_probe": "ghidra_path",
+    "ghidra_analyze": "file_path",
+    "angr_triage": "file_path",
+    "yara_scan": "target_path",
+    "upx_unpack": "file_path",
+    "tool_health_check": "tools",
+}
+
+
 class AgentToolDisplayMixin(AgentToolSummaryMixin, AgentToolPreviewMixin):
     # ── Tool call display ──────────────────────────────────────────
-
-    _TOOL_LABEL = {
-        "read_file": "Read",
-        "glob": "Glob",
-        "grep": "Search",
-        "list_dir": "List",
-        "write_file": "Write",
-        "edit_file": "Edit",
-        "multi_edit": "Edit",
-        "bash": "Run",
-        "git_status": "Git status",
-        "git_diff": "Git diff",
-        "binary_inspect": "Inspect binary",
-        "binary_find": "Find bytes",
-        "binary_hexdump": "Hexdump",
-        "ida_probe": "IDA probe",
-        "ida_analyze": "IDA analyze",
-        "ida_focus_decompile": "IDA focus",
-        "ida_deobfuscate": "IDA deobf",
-        "ida_mcp_ensure": "IDA MCP ensure",
-        "ida_mcp_probe": "IDA MCP probe",
-        "ida_mcp_list_tools": "IDA MCP tools",
-        "ida_mcp_call": "IDA MCP call",
-        "encoded_string_extract": "Extract strings",
-        "obfuscated_data_map": "Map data",
-        "reverse_technique_map": "Plan route",
-        "reverse_evidence_map": "Map evidence",
-        "runtime_string_hooks": "Generate hooks",
-        "external_static_analyze": "External scan",
-        "ghidra_probe": "Ghidra probe",
-        "ghidra_analyze": "Ghidra analyze",
-        "angr_triage": "angr triage",
-        "yara_scan": "YARA",
-        "upx_unpack": "UPX",
-        "tool_health_check": "Tool check",
-        "web_search": "Web search",
-        "web_fetch": "Fetch",
-    }
-
-    # Tool categories → (icon, color)
-    _TOOL_STYLE = {
-        "read_file": (">", "cyan"),
-        "glob":      (">", "cyan"),
-        "grep":      (">", "cyan"),
-        "list_dir":  (">", "cyan"),
-        "write_file":(">", "yellow"),
-        "edit_file": (">", "yellow"),
-        "multi_edit":(">", "yellow"),
-        "bash":      (">", "green"),
-        "git_status":(">", "cyan"),
-        "git_diff":  (">", "cyan"),
-        "binary_inspect":(">", "cyan"),
-        "binary_find":(">", "magenta"),
-        "binary_hexdump":(">", "magenta"),
-        "ida_probe":(">", "magenta"),
-        "ida_analyze":(">", "magenta"),
-        "ida_focus_decompile":(">", "magenta"),
-        "ida_deobfuscate":(">", "magenta"),
-        "ida_mcp_ensure":(">", "magenta"),
-        "ida_mcp_probe":(">", "magenta"),
-        "ida_mcp_list_tools":(">", "magenta"),
-        "ida_mcp_call":(">", "magenta"),
-        "encoded_string_extract":(">", "magenta"),
-        "obfuscated_data_map":(">", "magenta"),
-        "reverse_technique_map":(">", "magenta"),
-        "reverse_evidence_map":(">", "magenta"),
-        "runtime_string_hooks":(">", "magenta"),
-        "external_static_analyze":(">", "magenta"),
-        "ghidra_probe":(">", "magenta"),
-        "ghidra_analyze":(">", "magenta"),
-        "angr_triage":(">", "magenta"),
-        "yara_scan":(">", "magenta"),
-        "upx_unpack":(">", "yellow"),
-        "tool_health_check":(">", "cyan"),
-        "web_search":(">", "magenta"),
-        "web_fetch": (">", "magenta"),
-    }
 
     def _render_tool_call(self, name: str, params: dict) -> str:
         """Render a one-line tool call indicator with icon and color."""
         from rich.markup import escape as _escape
-        icon, color = self._TOOL_STYLE.get(name, (">", "dim"))
-        primary = {
-            "bash": "command", "read_file": "file_path",
-            "write_file": "file_path", "edit_file": "file_path",
-            "multi_edit": "file_path",
-            "glob": "pattern", "grep": "pattern", "list_dir": "path",
-            "web_search": "query", "web_fetch": "url",
-            "git_diff": "path",
-            "binary_inspect": "file_path", "binary_find": "file_path",
-            "binary_hexdump": "file_path", "ida_probe": "ida_path",
-            "ida_analyze": "file_path",
-            "ida_focus_decompile": "targets",
-            "ida_deobfuscate": "file_path",
-            "ida_mcp_ensure": "mcp_url",
-            "ida_mcp_probe": "mcp_url",
-            "ida_mcp_list_tools": "mcp_url",
-            "ida_mcp_call": "tool_name",
-            "encoded_string_extract": "file_path",
-            "obfuscated_data_map": "file_path",
-            "reverse_technique_map": "goal",
-            "reverse_evidence_map": "json_paths",
-            "runtime_string_hooks": "output_dir",
-            "external_static_analyze": "file_path",
-            "ghidra_probe": "ghidra_path",
-            "ghidra_analyze": "file_path",
-            "angr_triage": "file_path",
-            "yara_scan": "target_path",
-            "upx_unpack": "file_path",
-            "tool_health_check": "tools",
-        }
-        key = primary.get(name)
+        label, icon, color = _TOOL_META.get(name, (name, ">", "dim"))
+        key = _PRIMARY_PARAM.get(name)
         if key and key in params:
             val = _escape(str(params[key]))
             if len(val) > 80:
                 val = val[:77] + "..."
-            return f"  [{color}]{icon}[/] [bold]{self._tool_label(name)}[/] [dim]{val}[/]"
-        return f"  [{color}]{icon}[/] [bold]{self._tool_label(name)}[/]"
+            return f"  [{color}]{icon}[/] [bold]{label}[/] [dim]{val}[/]"
+        return f"  [{color}]{icon}[/] [bold]{label}[/]"
 
     def _tool_label(self, name: str) -> str:
-        return self._TOOL_LABEL.get(name, name)
+        label, _icon, _color = _TOOL_META.get(name, (name, ">", "dim"))
+        return label
 
     def _should_show_success_result(self, name: str, summary: str) -> bool:
         if name in ("write_file", "edit_file", "multi_edit"):

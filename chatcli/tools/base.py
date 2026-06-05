@@ -52,6 +52,11 @@ def coerce_str_list(value: Any) -> list[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
+def get_workspace(kwargs: dict, default: str = ".") -> str:
+    """Extract the workspace path from tool kwargs."""
+    return kwargs.get("workspace", default)
+
+
 class Tool:
     """Base class for all tools."""
 

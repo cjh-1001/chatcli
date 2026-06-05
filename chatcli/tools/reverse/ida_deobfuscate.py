@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from ..base import Tool, ToolResult
-from ..ida import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
+from .._ida_utils import _cleanup_paths, _default_ida_json_path, _find_ida, _ida_not_found_message, _load_reusable_json
 from ..reverse_text import optimize_ida_text_data, persist_optimized_json, rank_text_items, short_text
 
 from .ida_deobfuscate_script import IDA_DEOBFUSCATE_SCRIPT

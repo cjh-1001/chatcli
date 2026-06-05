@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .attack_technique_rules import HIGH_IMPACT, TECHNIQUE_MAP
 
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
-
-
-def _short(value: Any, limit: int = 220) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -26,19 +19,6 @@ def _as_list(value: Any) -> list[Any]:
         return value
     return [value]
 
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for technique mapping ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _collect(value: Any, caps: list[dict[str, Any]], chain: list[dict[str, Any]], audits: list[dict[str, Any]]) -> None:
@@ -216,7 +196,7 @@ class AttackTechniqueMapperTool(Tool):
         if isinstance(evidence_graph, dict):
             _collect(evidence_graph, caps, chain, audits)
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="technique mapping")
             if error:
                 warnings.append(error)
                 continue
@@ -261,7 +241,7 @@ class AttackTechniqueMapperTool(Tool):
                     f"- Status: {item['status']} ({item['status_reason']})",
                     f"- Confidence: {item['confidence']}",
                     f"- In attack chain: {item['in_attack_chain']}",
-                    f"- Evidence: {'; '.join(_short(ev, 120) for ev in item['evidence']) or 'none'}",
+                    f"- Evidence: {'; '.join(short_text(ev, 120) for ev in item['evidence']) or 'none'}",
                 ])
         if issues:
             lines.extend(["", "## Issues"])

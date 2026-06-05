@@ -1,4 +1,9 @@
-# chatcli configuration example.
+# chatcli — complete configuration reference.
+# This file documents every available option.
+# `chatcli --setup` generates a minimal starter config; use this file as a
+# reference when you want to add advanced options (reverse tools, IDA MCP,
+# compression tuning, path-based permission rules, etc.).
+#
 # Keep real API keys and machine-local paths in ~/.chatcli/config.yaml or
 # .chatcli/config.yaml. Those local files are intentionally ignored by Git.
 
@@ -58,6 +63,7 @@ permissions:
     - yara_scan
     - upx_unpack
     - binary_patch
+    - malware_share_package
     - chatcli_auto_request
   deny: []
   mode: default

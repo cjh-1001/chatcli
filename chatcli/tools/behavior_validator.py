@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_str_list
 from .behavior_rules import CAPABILITY_RULES
-
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
 
 HIGH_IMPACT_CATEGORIES = {
     "c2_network",
@@ -35,13 +34,6 @@ HIGH_IMPACT_CATEGORIES = {
 }
 
 
-def _short(value: Any, limit: int = 180) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
-
-
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -59,20 +51,6 @@ def _confidence_rank(value: Any) -> int:
         "hypothesis": 1,
         "blocked": 0,
     }.get(str(value or "").strip().lower(), 0)
-
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for behavior validation ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _collect(value: Any, caps: list[dict[str, Any]], chain: list[dict[str, Any]], audits: list[dict[str, Any]]) -> None:
@@ -170,7 +148,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
                 issues,
                 "high",
                 "attack_step_missing_evidence",
-                f"Attack step {step_no} ({_short(behavior)}) has {confidence} confidence but no direct evidence.",
+                f"Attack step {step_no} ({short_text(behavior)}) has {confidence} confidence but no direct evidence.",
                 {"step": step_no, "behavior": behavior, "confidence": confidence},
                 "Add concrete evidence or downgrade the step.",
             )
@@ -180,7 +158,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
                 issues,
                 severity,
                 "high_confidence_with_open_gate",
-                f"Attack step {step_no} ({_short(behavior)}) is high confidence while validation gates remain open.",
+                f"Attack step {step_no} ({short_text(behavior)}) is high confidence while validation gates remain open.",
                 {"step": step_no, "behavior": behavior, "confidence": confidence},
                 "Keep as likely/static capability until the required validation is satisfied.",
             )
@@ -189,7 +167,7 @@ def _validate_attack_chain(attack_chain: list[dict[str, Any]], issues: list[dict
                 issues,
                 "medium",
                 "confirmed_with_gaps",
-                f"Attack step {step_no} ({_short(behavior)}) is confirmed but still has gaps.",
+                f"Attack step {step_no} ({short_text(behavior)}) is confirmed but still has gaps.",
                 {"step": step_no, "behavior": behavior},
                 "Resolve the gaps or downgrade from confirmed.",
             )
@@ -202,7 +180,7 @@ def _validate_audits(audits: list[dict[str, Any]], issues: list[dict[str, Any]])
                 issues,
                 "high" if _confidence_rank(item.get("confidence")) >= 3 else "medium",
                 "unsupported_capability",
-                f"Capability lacks evidence support in evidence graph: {_short(item.get('label'))}.",
+                f"Capability lacks evidence support in evidence graph: {short_text(item.get('label'))}.",
                 item,
                 "Add supporting evidence or downgrade/remove the claim.",
             )
@@ -211,7 +189,7 @@ def _validate_audits(audits: list[dict[str, Any]], issues: list[dict[str, Any]])
                 issues,
                 "high" if _confidence_rank(item.get("confidence")) >= 3 else "medium",
                 "unsupported_attack_step",
-                f"Attack step lacks evidence support in evidence graph: {_short(item.get('label'))}.",
+                f"Attack step lacks evidence support in evidence graph: {short_text(item.get('label'))}.",
                 item,
                 "Add supporting evidence or downgrade/remove the step.",
             )
@@ -221,7 +199,7 @@ def _validate_audits(audits: list[dict[str, Any]], issues: list[dict[str, Any]])
                     issues,
                     "medium",
                     "validation_required",
-                    f"High-confidence capability still requires validation: {_short(item.get('label'))}.",
+                    f"High-confidence capability still requires validation: {short_text(item.get('label'))}.",
                     item,
                     "Keep wording as static/likely unless the claim gate is satisfied.",
                 )
@@ -282,7 +260,7 @@ class BehaviorClaimValidatorTool(Tool):
                 _collect(obj, caps, chain, audits)
 
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="behavior validation")
             if error:
                 warnings.append(error)
                 continue
@@ -394,7 +372,7 @@ class BehaviorCoverageMatrixTool(Tool):
         warnings: list[str] = []
 
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="behavior validation")
             if error:
                 warnings.append(error)
                 continue

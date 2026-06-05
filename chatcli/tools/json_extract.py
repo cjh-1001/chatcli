@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
@@ -12,13 +13,6 @@ MAX_JSON_SIZE = 200 * 1024 * 1024
 STREAM_CHUNK_SIZE = 64 * 1024
 STREAM_BUFFER_TRIM = 1024 * 1024
 STREAM_MODES = {"stream_count", "stream_sample", "stream_filter"}
-
-
-def _short(text: Any, limit: int = 180) -> str:
-    value = re.sub(r"\s+", " ", str(text)).strip()
-    if len(value) <= limit:
-        return value
-    return value[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _resolve_path(data: Any, path: str) -> Any:
@@ -140,7 +134,7 @@ def _summarize(value: Any, prefix: str = "$", depth: int = 0, max_depth: int = 3
         if value:
             lines.extend(_summarize(value[0], f"{prefix}[0]", depth + 1, max_depth))
     else:
-        lines.append(f"- {prefix}: {type(value).__name__} sample={_short(value, 80)}")
+        lines.append(f"- {prefix}: {type(value).__name__} sample={short_text(value, 80)}")
     return lines
 
 

@@ -8,10 +8,6 @@ from pathlib import Path
 from .context import build_system_prompt
 
 
-SESSIONS_DIR = Path.home() / ".chatcli" / "sessions"
-LAST_SESSION_FILE = Path.home() / ".chatcli" / "last_session.json"
-
-
 def session_dir_for_workspace(workspace: str | Path) -> Path:
     return Path(workspace).resolve() / ".chatcli" / "sessions"
 
@@ -43,24 +39,6 @@ class AgentSessionMixin:
                         repaired += 1
         if repaired and self.debug:
             self._safe_print(f"[dim]● repaired {repaired} empty messages[/]")
-
-    def _notify_workspace_change(self, old_workspace: str):
-        """If workspace changed since session was saved, tell the model."""
-        if not old_workspace or old_workspace == self.workspace:
-            return
-        self._safe_print(
-            f"[yellow]! workspace changed: {old_workspace}[/] [dim]→ {self.workspace}[/]"
-        )
-        # Inject a system note so the model knows
-        self._history.append({
-            "role": "user",
-            "content": (
-                f"[System note: The working directory has changed from "
-                f"'{old_workspace}' to '{self.workspace}'. "
-                f"All file paths should use the new workspace. "
-                f"Please confirm you're working in the correct directory.]"
-            ),
-        })
 
     def auto_restore(self) -> bool:
         """Restore the last session if it exists. Returns True if restored."""
@@ -257,18 +235,6 @@ class AgentSessionMixin:
             except Exception:
                 pass
         return sessions
-
-    def delete_session(self, name: str) -> bool:
-        """Delete a named session."""
-        try:
-            filepath = self._session_path(name)
-        except ValueError:
-            return False
-        if filepath.exists():
-            filepath.unlink()
-            self._safe_print(f"[dim]● deleted session '{name}'[/]")
-            return True
-        return False
 
     def _auto_save(self):
         """Save the current in-memory history to the resumable last session."""

@@ -2,34 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
-
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
-
-
-def _short(value: Any, limit: int = 180) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
-
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for evidence graph ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _find_lists(value: Any, capabilities: list[dict[str, Any]], attack_chain: list[dict[str, Any]]) -> None:
@@ -105,7 +83,7 @@ def _dedupe_attack_chain(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if item.get("step") is not None:
             key = f"step:{item.get('step')}"
         else:
-            key = f"behavior:{_short(item.get('behavior'), 100).lower()}"
+            key = f"behavior:{short_text(item.get('behavior'), 100).lower()}"
         if key not in positions:
             positions[key] = len(deduped)
             deduped.append(item)
@@ -143,18 +121,18 @@ def _build_graph(capabilities: list[dict[str, Any]], attack_chain: list[dict[str
 
         for term in _as_list(cap.get("matched_terms"))[:10]:
             sig_id = f"signal:{term.lower()[:80]}"
-            if _add_node(nodes, sig_id, "signal", _short(term), max_nodes):
+            if _add_node(nodes, sig_id, "signal", short_text(term), max_nodes):
                 _add_edge(edges, sig_id, cap_id, "matches", "matches")
 
         for eidx, evidence in enumerate(_as_list(cap.get("evidence"))[:8]):
             ev_id = f"evidence:{idx}:{eidx}"
-            if _add_node(nodes, ev_id, "evidence", _short(evidence), max_nodes):
+            if _add_node(nodes, ev_id, "evidence", short_text(evidence), max_nodes):
                 _add_edge(edges, ev_id, cap_id, "supports", "supports")
 
         gates = _as_list(cap.get("claim_gate")) + _as_list(cap.get("required_validation"))
         for gidx, gate in enumerate(gates[:6]):
             gate_id = f"gate:{idx}:{gidx}"
-            if _add_node(nodes, gate_id, "validation", _short(gate), max_nodes):
+            if _add_node(nodes, gate_id, "validation", short_text(gate), max_nodes):
                 _add_edge(edges, cap_id, gate_id, "requires_validation", "requires")
 
     for idx, step in enumerate(attack_chain):
@@ -167,7 +145,7 @@ def _build_graph(capabilities: list[dict[str, Any]], attack_chain: list[dict[str
             nodes,
             step_id,
             "attack_step",
-            _short(behavior),
+            short_text(behavior),
             max_nodes,
             confidence=str(step.get("confidence") or ""),
             gate_status=str(step.get("gate_status") or ""),
@@ -179,7 +157,7 @@ def _build_graph(capabilities: list[dict[str, Any]], attack_chain: list[dict[str
 
         for eidx, evidence in enumerate(_as_list(step.get("evidence"))[:4]):
             ev_id = f"step_evidence:{step_no}:{eidx}"
-            if _add_node(nodes, ev_id, "evidence", _short(evidence), max_nodes):
+            if _add_node(nodes, ev_id, "evidence", short_text(evidence), max_nodes):
                 _add_edge(edges, ev_id, step_id, "supports", "supports")
 
     return {"nodes": list(nodes.values()), "edges": edges}
@@ -293,7 +271,7 @@ class EvidenceGraphTool(Tool):
         warnings = []
 
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="evidence graph")
             if error:
                 warnings.append(error)
                 continue

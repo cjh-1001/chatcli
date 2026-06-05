@@ -405,6 +405,22 @@ py -3 -m pip install angr
 4. `reverse_evidence_map`
 5. `ida_focus_decompile` / IDA MCP / `angr_triage` 做定点分析
 
+### 恶意样本分析结果分享
+
+完成 `/malware` 静态分析后，可以用 `/malware-share` 生成一个适合团队流转的 ZIP 包。默认不会打包样本二进制，只包含样本哈希/元数据、脱敏后的报告、当前任务上下文和 `manifest.json`：
+
+```powershell
+chatcli "/malware-share C:\samples\suspicious.exe --report .chatcli\reports\malware-triage-xxx.html"
+```
+
+也可以不传 `--report`，chatcli 会优先使用 `.chatcli/reports/` 下最新的报告：
+
+```powershell
+chatcli "/malware-share C:\samples\suspicious.exe"
+```
+
+生成位置默认是 `.chatcli/share/`。如果确实是在授权实验室渠道内交接样本本体，可以显式加入 `--include-sample`，样本会以 `sample/<name>.quarantine` 名称放入包内；不要把该选项用于公开分享或不受控渠道。
+
 ### 外部工具下载指引
 
 | 工具 | 用途 | 安装/下载 |

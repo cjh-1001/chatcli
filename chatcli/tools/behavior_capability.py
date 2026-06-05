@@ -7,18 +7,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import MAX_JSON_SIZE
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .behavior_rules import BOUNDARY_TERMS, CAPABILITY_RULES, CLAIM_GATES, STRONG_CLUSTERS
 
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
 MAX_COLLECTED_STRINGS = 5000
-
-
-def _short(text: Any, limit: int = 220) -> str:
-    compact = re.sub(r"\s+", " ", str(text or "")).strip()
-    if len(compact) <= limit:
-        return compact
-    return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _normalize_signal(item: Any) -> dict[str, str]:
@@ -106,7 +100,7 @@ def _load_json_signals(path: Path) -> tuple[list[str], str | None]:
     if path.is_dir():
         return [], f"path is a directory, not JSON: {path}"
     size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
+    if size > MAX_JSON_SIZE:
         return [], f"JSON file too large for behavior map ({size} bytes): {path}"
     try:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
@@ -156,7 +150,7 @@ def _match_capabilities(signals: list[str], max_results: int) -> list[dict[str, 
                 if _term_matches(term, low):
                     matched_terms.add(term)
                     score += _source_weight(source, confidence)
-                    snippet = _short(original)
+                    snippet = short_text(original)
                     if snippet and snippet not in evidence:
                         evidence.append(snippet)
                         if source:
@@ -278,7 +272,7 @@ class BehaviorCapabilityMapTool(Tool):
                     lines.append("- Claim gate:")
                     lines.extend(f"  - {gate}" for gate in item["claim_gate"])
                 lines.append("- Evidence:")
-                lines.extend(f"  - {_short(ev)}" for ev in item["evidence"][:6])
+                lines.extend(f"  - {short_text(ev)}" for ev in item["evidence"][:6])
                 lines.append("- Required validation:")
                 lines.extend(f"  - {step}" for step in item["required_validation"])
 

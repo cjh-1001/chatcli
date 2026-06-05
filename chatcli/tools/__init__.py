@@ -26,8 +26,10 @@ from .ghidra import GhidraAnalyzeTool, GhidraProbeTool
 from .angr_triage import AngrTriageTool
 from .external_static import ExternalStaticAnalyzeTool, YaraScanTool, UpxUnpackTool
 from .reverse import (
-    IdaDeobfuscateTool,
     EncodedStringExtractTool,
+    IdaDeobfuscateTool,
+    ReverseEvidenceMapTool,
+    ReverseTechniqueMapTool,
     RuntimeStringHooksTool,
 )
 from .data_obfuscation import ObfuscatedDataMapTool
@@ -37,8 +39,7 @@ from .evidence_graph import EvidenceGraphTool
 from .behavior_validator import BehaviorClaimValidatorTool, BehaviorCoverageMatrixTool
 from .command_capability import CommandCapabilityMapTool
 from .attack_technique import AttackTechniqueMapperTool
-from .reverse_technique import ReverseTechniqueMapTool
-from .reverse_evidence import ReverseEvidenceMapTool
+from .malware_share import MalwareSharePackageTool
 from .internal import ChatcliAutoRequestTool
 from .tool_health import ToolHealthCheckTool
 
@@ -89,6 +90,7 @@ def create_registry(config=None) -> ToolRegistry:
         BehaviorCoverageMatrixTool(),
         CommandCapabilityMapTool(),
         AttackTechniqueMapperTool(),
+        MalwareSharePackageTool(),
         ReverseTechniqueMapTool(),
         ReverseEvidenceMapTool(),
         RuntimeStringHooksTool(),
@@ -120,6 +122,7 @@ __all__ = [
     "AttackChainBuilderTool", "EvidenceGraphTool",
     "BehaviorClaimValidatorTool", "BehaviorCoverageMatrixTool",
     "CommandCapabilityMapTool", "AttackTechniqueMapperTool",
+    "MalwareSharePackageTool",
     "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",
     "create_registry",

@@ -2,7 +2,7 @@
 
 import subprocess
 import time
-from .base import Tool, ToolResult
+from .base import Tool, ToolResult, get_workspace
 
 
 class BashTool(Tool):
@@ -41,7 +41,7 @@ class BashTool(Tool):
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec,
-                cwd=kwargs.get("workspace", "."),
+                cwd=get_workspace(kwargs),
                 encoding="utf-8",
                 errors="replace",
             )

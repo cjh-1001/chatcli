@@ -4,8 +4,9 @@ import json
 import re
 from pathlib import Path
 
-from .base import Tool, ToolResult, coerce_int, coerce_str_list
-from .reverse_text import optimize_ida_text_data, rank_text_items, short_text
+from .._text_utils import short_text
+from ..base import Tool, ToolResult, coerce_int, coerce_str_list
+from ..reverse_text import optimize_ida_text_data, rank_text_items
 
 
 DEFAULT_KEYWORDS = [
@@ -47,10 +48,6 @@ def _load_json(path: Path) -> dict:
 def _contains_keyword(text: str, keywords: list[str]) -> bool:
     lowered = str(text or "").lower()
     return any(str(k).lower() in lowered for k in keywords if str(k).strip())
-
-
-def _short(text: str, limit: int = 180) -> str:
-    return short_text(text, limit)
 
 
 def _function_lookup(data: dict) -> dict[str, dict]:
@@ -158,7 +155,7 @@ class ReverseEvidenceMapTool(Tool):
             warnings = data.get("warnings") or []
             if warnings:
                 metadata["warnings"] += len(warnings)
-                lines.append("- Warnings: " + "; ".join(_short(w, 120) for w in warnings[:5]))
+                lines.append("- Warnings: " + "; ".join(short_text(w, 120) for w in warnings[:5]))
 
             imports = [
                 item for item in data.get("imports", []) or []
@@ -187,7 +184,7 @@ class ReverseEvidenceMapTool(Tool):
                     score = f" score={item.get('text_score')}" if item.get("text_score") is not None else ""
                     flags = f" flags={','.join(item.get('text_flags', []))}" if item.get("text_flags") else ""
                     lines.append(
-                        f"- {item.get('ea', '')}{score}{flags}: {repr(_short(item.get('value', ''), 140))}"
+                        f"- {item.get('ea', '')}{score}{flags}: {repr(short_text(item.get('value', ''), 140))}"
                         f" xrefs=[{xrefs}]"
                     )
 
@@ -197,7 +194,7 @@ class ReverseEvidenceMapTool(Tool):
             if candidates:
                 lines.extend(["", "### Candidate Functions"])
                 for item in candidates:
-                    evidence = "; ".join(_short(e, 90) for e in (item.get("evidence") or [])[:4])
+                    evidence = "; ".join(short_text(e, 90) for e in (item.get("evidence") or [])[:4])
                     lines.append(
                         f"- {item.get('start', '')} {item.get('name', '')} "
                         f"score={item.get('score', 0)} evidence={evidence}"
@@ -215,11 +212,11 @@ class ReverseEvidenceMapTool(Tool):
                 lines.extend(["", "### Pseudocode Hits"])
                 for item in pseudocode_hits:
                     sample_lines = [
-                        _short(line, 160) for line in (item.get("text") or "").splitlines()
+                        short_text(line, 160) for line in (item.get("text") or "").splitlines()
                         if _contains_keyword(line, keywords)
                     ][:4]
                     if not sample_lines:
-                        sample_lines = [_short(line, 160) for line in (item.get("text") or "").splitlines()[:4]]
+                        sample_lines = [short_text(line, 160) for line in (item.get("text") or "").splitlines()[:4]]
                     lines.append(
                         f"- {item.get('start', '')} {item.get('function', '')}: "
                         + " | ".join(sample_lines)
@@ -244,7 +241,7 @@ class ReverseEvidenceMapTool(Tool):
                 lines.extend(["", "### Function Maps"])
                 for item in interesting_maps:
                     strings_text = "; ".join(
-                        _short(s.get("value", ""), 80)
+                        short_text(s.get("value", ""), 80)
                         for s in rank_text_items(item.get("strings", []) or [])[:3]
                     )
                     role = (item.get("api_role") or {}).get("role", "")

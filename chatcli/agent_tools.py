@@ -3,7 +3,7 @@
 import time
 from pathlib import Path
 
-from .agent_tool_display import AgentToolDisplayMixin
+from .agent_tool_display import AgentToolDisplayMixin, _PRIMARY_PARAM
 
 
 class AgentToolMixin(AgentToolDisplayMixin):
@@ -140,29 +140,7 @@ class AgentToolMixin(AgentToolDisplayMixin):
         if "**Status:** in_progress" not in content:
             return
 
-        primary = {
-            "bash": "command", "read_file": "file_path",
-            "write_file": "file_path", "edit_file": "file_path",
-            "multi_edit": "file_path",
-            "glob": "pattern", "grep": "pattern", "list_dir": "path",
-            "web_search": "query", "web_fetch": "url",
-            "git_diff": "path",
-            "binary_inspect": "file_path", "ida_analyze": "file_path",
-            "ida_focus_decompile": "targets",
-            "ida_deobfuscate": "file_path",
-            "ida_mcp_ensure": "mcp_url",
-            "ida_mcp_call": "tool_name",
-            "ghidra_analyze": "file_path",
-            "angr_triage": "file_path",
-            "encoded_string_extract": "file_path",
-            "obfuscated_data_map": "file_path",
-            "reverse_technique_map": "goal",
-            "reverse_evidence_map": "json_paths",
-            "runtime_string_hooks": "output_dir",
-            "external_static_analyze": "file_path", "yara_scan": "target_path",
-            "upx_unpack": "file_path",
-        }
-        key = primary.get(name)
+        key = _PRIMARY_PARAM.get(name)
         detail = str(params.get(key, "")) if key else ""
         if len(detail) > 60:
             detail = detail[:57] + "..."

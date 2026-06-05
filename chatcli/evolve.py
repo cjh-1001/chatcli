@@ -126,41 +126,6 @@ def record_generation(workspace: str, gen: int, results: list[dict],
     return state
 
 
-def complete_evolve(workspace: str, summary: str = "") -> None:
-    """Mark evolution as complete."""
-    state = get_state(workspace)
-    if state:
-        state["status"] = "done"
-        _save_state(workspace, state)
-
-    if summary:
-        with open(_log_file(workspace), "a", encoding="utf-8") as f:
-            f.write(f"---\n\n## Final Result\n\n{summary}\n")
-
-
-def get_progress(workspace: str) -> str:
-    """Return a human-readable progress summary."""
-    state = get_state(workspace)
-    if not state:
-        return "(no active evolution)"
-
-    gen = state["current_gen"]
-    total = state["generations"]
-    best = state.get("best_score", "—")
-
-    lines = [
-        f"Evolution: gen {gen}/{total} | best score: {best}",
-        f"Target: {state['target']}",
-        f"Goal: {state['goal']}",
-        f"Test: {state.get('test_cmd') or '(manual)'}",
-    ]
-    if state["history"]:
-        last = state["history"][-1]
-        lines.append(f"Last: gen {last['generation']} winner=var {last['winner']+1} score={last['score']}")
-
-    return "\n".join(lines)
-
-
 # ── Evolution prompt ───────────────────────────────────────────────
 
 
@@ -303,25 +268,6 @@ def record_cycle(workspace: str, target: str, goal: str,
         f.write(f"---\n\n")
 
     return state
-
-
-def get_continuous_progress(workspace: str) -> str:
-    """Return progress for continuous mode."""
-    state = get_state(workspace)
-    if not state:
-        return "(no active evolution)"
-
-    n = state.get("cycles_completed", 0)
-    improvements = state.get("total_improvements", [])
-    lines = [
-        f"Continuous Evolution: {n} cycles completed",
-        f"Focus: {state.get('focus', 'general')}",
-        f"Started: {state.get('started', '?')[:16]}",
-    ]
-    for imp in improvements[-5:]:
-        lines.append(f"  [{imp['score']}] {imp['target']} — {imp['goal'][:60]}")
-
-    return "\n".join(lines)
 
 
 def build_continuous_prompt(state: dict) -> str:

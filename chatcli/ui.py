@@ -145,6 +145,7 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         if c=="/work": return self._handle_work(a)
         if c=="/audit": return self._handle_audit(a)
         if c=="/malware": return self._handle_malware(a)
+        if c=="/malware-share": return self._handle_malware_share(a)
         if c=="/reverse": return self._handle_reverse(a)
         if c=="/evolve": return self._handle_evolve(a)
         if c=="/doctor": return self._handle_doctor()
@@ -310,6 +311,76 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
             self.console.print(result.content)
             return True
         self.console.print("[yellow]Usage: /tools list | /tools check [tool...] [--versions][/]")
+        return True
+    def _handle_malware_share(self, a):
+        try:
+            parts = shlex.split(a) if a else []
+        except ValueError as e:
+            self.console.print(f"[yellow]Invalid arguments:[/] {e}")
+            return True
+
+        params = {
+            "workspace": str(self.config.workspace),
+            "include_sample": False,
+            "redact_paths": True,
+            "redact_secrets": True,
+        }
+        positionals = []
+        i = 0
+        while i < len(parts):
+            token = parts[i]
+            if token == "--include-sample":
+                params["include_sample"] = True
+            elif token == "--no-redact-paths":
+                params["redact_paths"] = False
+            elif token == "--no-redact-secrets":
+                params["redact_secrets"] = False
+            elif token in ("--report", "-r"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /malware-share [sample] --report <path>[/]")
+                    return True
+                params["report_path"] = parts[i + 1]
+                i += 1
+            elif token in ("--output-dir", "-o"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /malware-share [sample] --output-dir <dir>[/]")
+                    return True
+                params["output_dir"] = parts[i + 1]
+                i += 1
+            elif token == "--package-name":
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /malware-share [sample] --package-name <name.zip>[/]")
+                    return True
+                params["package_name"] = parts[i + 1]
+                i += 1
+            elif token == "--notes":
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /malware-share [sample] --notes <text>[/]")
+                    return True
+                params["notes"] = parts[i + 1]
+                i += 1
+            elif token.startswith("-"):
+                self.console.print(f"[yellow]Unknown option:[/] {token}")
+                return True
+            else:
+                positionals.append(token)
+            i += 1
+
+        if positionals:
+            params["source_path"] = positionals[0]
+        if len(positionals) > 1:
+            self.console.print("[yellow]Usage: /malware-share [sample] [--report path] [--include-sample][/]")
+            return True
+
+        tool = self.agent.tools.get("malware_share_package")
+        if not tool:
+            self.console.print("[red]malware_share_package is not registered.[/]")
+            return True
+        result = tool.execute(**params)
+        if result.is_error:
+            self.console.print(f"[red]{result.content}[/]")
+        else:
+            self.console.print(result.content)
         return True
     def _handle_doctor(self):
         table = Table(title="chatcli doctor", box=box.SIMPLE, show_lines=False)

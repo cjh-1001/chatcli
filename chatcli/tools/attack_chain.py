@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
-
-MAX_JSON_INPUT_SIZE = 50 * 1024 * 1024
 
 STAGE_ORDER = {
     "initial_access_artifact": (10, "入口投递/初始执行"),
@@ -85,25 +84,6 @@ IMPACT_HINTS = {
 }
 
 
-def _short(value: Any, limit: int = 260) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
-
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for attack-chain builder ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _find_capabilities(value: Any, out: list[dict[str, Any]]) -> None:
@@ -223,12 +203,12 @@ def _merge_step_group(group: list[dict[str, Any]]) -> dict[str, Any]:
         "stage": first["stage"],
         "behavior": " / ".join(behaviors),
         "technique": ", ".join(unique_techniques[:12]) or first["behavior"],
-        "evidence": "\n".join(f"- {_short(ev)}" for ev in unique_evidence[:8]) or "No direct evidence snippet provided.",
+        "evidence": "\n".join(f"- {short_text(ev)}" for ev in unique_evidence[:8]) or "No direct evidence snippet provided.",
         "target": "受害主机/环境",
         "impact": "；".join(dict.fromkeys(impact_bits)),
         "confidence": confidence,
         "claim_level": claim_level,
-        "gaps": "\n".join(f"- {_short(v)}" for v in unique_gaps[:8]),
+        "gaps": "\n".join(f"- {short_text(v)}" for v in unique_gaps[:8]),
         "claim_gate": [x for x in dict.fromkeys(gates) if x],
         "gate_status": "needs_validation" if gates else "not_required",
         "source_category": " + ".join(dict.fromkeys(cat for cat in source_categories if cat)),
@@ -305,9 +285,9 @@ def _build_steps(capabilities: list[dict[str, Any]], max_steps: int) -> list[dic
     for item in normalized[:max_steps]:
         order, stage = STAGE_ORDER.get(item["category"], (999, "未归类能力"))
         terms = ", ".join(item["matched_terms"][:8]) or item["label"]
-        evidence = "\n".join(f"- {_short(ev)}" for ev in item["evidence"][:6]) or "No direct evidence snippet provided."
-        gaps = "\n".join(f"- {_short(v)}" for v in item["required_validation"][:5])
-        claim_gate = [f"Claim gate: {_short(v)}" for v in item.get("claim_gate", [])[:5]]
+        evidence = "\n".join(f"- {short_text(ev)}" for ev in item["evidence"][:6]) or "No direct evidence snippet provided."
+        gaps = "\n".join(f"- {short_text(v)}" for v in item["required_validation"][:5])
+        claim_gate = [f"Claim gate: {short_text(v)}" for v in item.get("claim_gate", [])[:5]]
         if claim_gate:
             gaps = "\n".join([part for part in [gaps, *[f"- {gate}" for gate in claim_gate]] if part])
         steps.append({
@@ -373,7 +353,7 @@ class AttackChainBuilderTool(Tool):
         warnings = []
 
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="attack chain")
             if error:
                 warnings.append(error)
                 continue

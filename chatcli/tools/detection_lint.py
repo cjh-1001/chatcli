@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
+from ._json_utils import load_json
+from ._text_utils import short_text
 from .base import Tool, ToolResult, coerce_str_list
-
-MAX_JSON_INPUT_SIZE = 20 * 1024 * 1024
 
 GENERIC_TOKENS = {
     "http://",
@@ -25,27 +24,6 @@ GENERIC_TOKENS = {
     "ntdll.dll",
     "user-agent",
 }
-
-
-def _short(value: Any, limit: int = 180) -> str:
-    text = " ".join(str(value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)].rstrip() + "..."
-
-
-def _load_json(path: Path) -> tuple[Any | None, str | None]:
-    if not path.exists():
-        return None, f"missing JSON file: {path}"
-    if path.is_dir():
-        return None, f"path is a directory, not JSON: {path}"
-    size = path.stat().st_size
-    if size > MAX_JSON_INPUT_SIZE:
-        return None, f"JSON file too large for detection lint ({size} bytes): {path}"
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace")), None
-    except Exception as exc:
-        return None, f"failed to read JSON {path}: {exc}"
 
 
 def _collect(value: Any, drafts: dict[str, Any], weak_iocs: list[str]) -> None:
@@ -231,7 +209,7 @@ class DetectionRuleLintTool(Tool):
         if isinstance(ioc_quality, dict):
             _collect(ioc_quality, drafts, weak_iocs)
         for raw_path in coerce_str_list(json_paths):
-            data, error = _load_json(Path(raw_path))
+            data, error = load_json(Path(raw_path), label="detection lint", max_size=20 * 1024 * 1024)
             if error:
                 warnings.append(error)
                 continue

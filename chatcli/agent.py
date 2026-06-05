@@ -1,5 +1,6 @@
 """Core agent loop — think → act → observe cycle."""
 
+import re as _re
 import time
 from rich.console import Console
 from rich.panel import Panel
@@ -133,8 +134,6 @@ The user's request follows below.
 """
 
     # ── Self-correction detection ─────────────────────────────────
-
-    import re as _re
 
     # Patterns that suggest the model is still trying, not done.
     # Each pattern uses \b for word boundaries to avoid false matches
