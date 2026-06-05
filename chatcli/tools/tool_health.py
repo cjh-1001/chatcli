@@ -193,6 +193,12 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
     elif name == "yara":
         configured = getattr(config, "yara_path", "") if config else ""
         path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "capa":
+        configured = getattr(config, "capa_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "floss":
+        configured = getattr(config, "floss_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
     else:
         path = _which_any(EXECUTABLE_PROBES.get(name, [name]))
     row: dict[str, object] = {
