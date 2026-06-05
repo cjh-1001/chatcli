@@ -190,6 +190,9 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
     elif name == "upx":
         configured = getattr(config, "upx_path", "") if config else ""
         path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "yara":
+        configured = getattr(config, "yara_path", "") if config else ""
+        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
     else:
         path = _which_any(EXECUTABLE_PROBES.get(name, [name]))
     row: dict[str, object] = {

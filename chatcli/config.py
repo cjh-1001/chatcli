@@ -115,6 +115,7 @@ class Config:
     upx_path: str = ""
     capa_path: str = ""
     floss_path: str = ""
+    yara_path: str = ""
     ida_mcp_url: str = ""
     ida_mcp_start_command: str = ""
     ida_mcp_auto_prepare: bool = False
@@ -277,6 +278,8 @@ class Config:
             cfg.capa_path = os.environ["CAPA_PATH"]
         if os.environ.get("FLOSS_PATH"):
             cfg.floss_path = os.environ["FLOSS_PATH"]
+        if os.environ.get("YARA_PATH"):
+            cfg.yara_path = os.environ["YARA_PATH"]
         if os.environ.get("IDA_MCP_URL"):
             cfg.ida_mcp_url = os.environ["IDA_MCP_URL"]
         if os.environ.get("IDA_MCP_START_COMMAND"):
@@ -347,7 +350,7 @@ class Config:
             "max_diff_lines", "tool_preview_lines", "tool_preview_chars",
             "search_backend", "ida_path", "ghidra_path", "die_path",
             "exiftool_path", "upx_path", "capa_path", "floss_path",
-            "ida_mcp_url", "ida_mcp_start_command",
+            "yara_path", "ida_mcp_url", "ida_mcp_start_command",
             "auto_resume", "auto_compress", "compress_threshold", "max_retries",
             "temp_script_dir", "temp_script_name", "enforce_temp_script_iteration",
             "workspace", "context_file",
@@ -375,7 +378,7 @@ class Config:
         if isinstance(reverse, dict):
             for key in ("ida_path", "ghidra_path", "die_path", "exiftool_path",
                         "upx_path", "capa_path", "floss_path",
-                        "ida_mcp_url", "ida_mcp_start_command"):
+                        "yara_path", "ida_mcp_url", "ida_mcp_start_command"):
                 if key in reverse:
                     setattr(cfg, key, reverse[key])
             for key in ("ida_mcp_auto_prepare", "ida_mcp_auto_start"):

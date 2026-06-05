@@ -234,6 +234,7 @@ _TOOL_PATH_FIELDS = (
     ("upx_path", "UPX_PATH", "UPX 路径", '例如 D:/Tools/upx.exe'),
     ("capa_path", "CAPA_PATH", "capa 路径 (flare-capa)", '例如 D:/Tools/capa.exe'),
     ("floss_path", "FLOSS_PATH", "FLOSS 路径 (flare-floss)", '例如 D:/Tools/floss.exe'),
+    ("yara_path", "YARA_PATH", "YARA 路径 (yara64.exe)", '例如 D:/Tools/yara64.exe'),
 )
 
 

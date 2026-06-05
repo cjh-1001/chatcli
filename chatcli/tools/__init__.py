@@ -97,7 +97,7 @@ def create_registry(config=None) -> ToolRegistry:
         ReverseEvidenceMapTool(),
         RuntimeStringHooksTool(),
         ExternalStaticAnalyzeTool(config),
-        YaraScanTool(),
+        YaraScanTool(config),
         UpxUnpackTool(config),
         ToolHealthCheckTool(config),
         ChatcliAutoRequestTool(),

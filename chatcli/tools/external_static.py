@@ -339,8 +339,9 @@ class ExternalStaticAnalyzeTool(Tool):
 class YaraScanTool(Tool):
     name = "yara_scan"
     description = (
-        "Run YARA rules against a local file or directory. Requires yara on PATH. "
-        "Does not execute the target binary."
+        "Run YARA rules against a local file or directory. "
+        "Configure yara_path in config, set the YARA_PATH env var, or ensure yara "
+        "is on PATH. Does not execute the target binary."
     )
     parameters = {
         "type": "object",
@@ -365,13 +366,30 @@ class YaraScanTool(Tool):
         "required": ["target_path", "rules_path"],
     }
 
+    def __init__(self, config=None):
+        self.config = config
+
+    def _find_yara(self) -> str | None:
+        configured = getattr(self.config, "yara_path", "") if self.config else ""
+        if configured and Path(configured).exists():
+            return str(Path(configured))
+        for name in ("yara64", "yara"):
+            found = shutil.which(name)
+            if found:
+                return found
+        return None
+
     def execute(
         self, target_path: str, rules_path: str, recursive: bool = True,
         timeout: int = 120000, **kwargs
     ) -> ToolResult:
-        yara = shutil.which("yara")
+        yara = self._find_yara()
         if not yara:
-            return ToolResult(content="yara executable not found on PATH.", is_error=True)
+            return ToolResult(
+                content="YARA not found. Install yara64.exe and configure "
+                "yara_path in .chatcli/config.yaml, or add it to PATH.",
+                is_error=True,
+            )
         target = Path(target_path)
         rules = Path(rules_path)
         if not target.exists():
