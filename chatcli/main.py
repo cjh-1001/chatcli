@@ -60,7 +60,8 @@ permissions:
   deny: []                   # Never allow
   protect_sensitive_files: true
 
-max_tool_rounds: 50
+max_tool_rounds: 80
+min_tool_rounds: 5              # require at least 5 tool calls before final answer
 auto_compress: true
 context_file: .chatcli/context.md
 """

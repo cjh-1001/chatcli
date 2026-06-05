@@ -194,25 +194,76 @@ The user's request follows below.
         r"next I'll|I'll try|I will try|I can try|I have to|I must|"
         r"I wasn't able|I couldn't|didn't work|failed to|"
         r"I need more|I still need|not yet|"
-        r"I haven't|I need to look|I should check"
+        r"I haven't|I need to look|I should check|"
+        # Additional: model realizes it's incomplete
+        r"I would need|I'd need to|I should also|I could also|"
+        r"I might also|perhaps I should|maybe I should|"
+        r"I'm not (?:fully |completely |entirely )?sure|"
+        r"more investigation|further (?:analysis|investigation|exploration)|"
+        r"without more|needs more|requires more|"
+        r"I don't have enough|insufficient (?:data|evidence|information)"
         r")\b",
         _re.IGNORECASE,
     )
     _SELF_DIRECTION_CN_RE = _re.compile(
         r"(?:"
-        r"需要(?:进一步|继续|更多|额外|补充)|"
+        r"需要(?:进一步|继续|更多|额外|补充|深入|完善|详细)|"
         r"还需要|仍需|还要|"
         r"下一步[：:要需]|下一阶段|"
-        r"尚未(?:完成|结束|提取|分析|解码|验证|确认)|"
-        r"没有(?:完成|结束|提取到|找到|发现)|"
+        r"尚未(?:完成|结束|提取|分析|解码|验证|确认|查明|确定)|"
+        r"没有(?:完成|结束|提取到|找到|发现|找到|查明)|"
         r"未能|无法[一现]|还不[能够行]|"
-        r"继续(?:分析|提取|解码|验证|完善|补充|深入)"
+        r"继续(?:分析|提取|解码|验证|完善|补充|深入|探索)|"
+        r"不够(?:充分|完整|详细|全面)|"
+        r"证据(?:不足|不够|不充分|有限|较少)|"
+        r"可能(?:需要|还需|还需进一步)|"
+        r"建议(?:进一步|继续|补充|深入)|"
+        r"暂[未无时]|"
+        r"希望(?:进一步|深入|补充|获得更多)|"
+        r"有待(?:进一步|验证|确认|分析|完善)"
+        r")"
+    )
+
+    # Patterns that suggest a premature conclusion in a short response.
+    # When these appear in responses under 500 chars and few tools were
+    # used, it strongly suggests the model is jumping to conclusions.
+    _PREMATURE_CONCLUSION_RE = _re.compile(
+        r"(?:"
+        r"\bthis is (?:definitely|certainly|clearly|obviously|surely|"
+        r"without (?:a |any )?doubt|undoubtedly|unquestionably)|"
+        r"\bthis (?:must be|has to be|is surely|is obviously)|"
+        r"\bconfirmed[.:]|definitely (?:malicious|benign|clean|safe)|"
+        r"\b(?:certainly|clearly|obviously) (?:malicious|benign|a |an )|"
+        r"\bno doubt|without question|"
+        r"\bthis (?:file|binary|sample) is (?:malicious|benign|clean|safe)[.]?$|"
+        r"\bverdict[：:]\s*(?:malicious|benign|clean|safe|suspicious)"
+        r")",
+        _re.IGNORECASE,
+    )
+    _PREMATURE_CONCLUSION_CN_RE = _re.compile(
+        r"(?:"
+        r"这(?:肯定|绝对|毫无疑问|显然|必定)是|"
+        r"可以(?:确定|肯定|确认).*?(?:恶意|安全|干净|正常)|"
+        r"结论[：:][\s]*(?:恶意|安全|干净|正常|可疑|危险)|"
+        r"判定[：:][\s]*(?:恶意|安全|干净|正常)|"
+        r"(?:绝对|肯定|非常)确定|"
+        r"毫无疑问|"
+        r"必是|必定是"
         r")"
     )
 
     # Only scan the tail of the response — self-direction language at the
     # end strongly suggests the model is still trying to figure things out.
     _SELF_DIRECTION_TAIL_CHARS = 500
+
+    # Minimum number of tools that should be used before a definitive
+    # conclusion. Below this threshold, the model likely hasn't explored
+    # enough. Not applied to simple factual queries.
+    _MIN_TOOLS_FOR_DEFINITIVE = 3
+
+    # If the response is under this length and has no tool evidence markers,
+    # it may be too shallow.
+    _MIN_RESPONSE_FOR_CONCLUSION = 400
 
     # Patterns that suggest a response is a complete/final report.
     # When matched, skip self-correction to avoid false positives.
@@ -240,7 +291,7 @@ The user's request follows below.
     )
 
     def _should_self_correct(self, final_text: str, exhausted: bool,
-                              correction_round: int) -> bool:
+                              correction_round: int, tools_used: int = 0) -> bool:
         """Decide whether the model needs another self-correction round."""
         if not self.config.self_correction:
             return False
@@ -267,6 +318,22 @@ The user's request follows below.
         if len(text) > 2000 and self._COMPLETE_REPORT_RE.search(text):
             return False
 
+        # ── Shallow analysis detection ──────────────────────────────
+        # If the model used very few tools and produced a short definitive
+        # answer, it probably didn't explore enough. Push it to go deeper.
+        if tools_used < self._MIN_TOOLS_FOR_DEFINITIVE and len(text) < self._MIN_RESPONSE_FOR_CONCLUSION:
+            # Only trigger if the response sounds like a conclusion (not a
+            # simple informational answer like "the file is at path X")
+            if (self._PREMATURE_CONCLUSION_RE.search(text)
+                    or self._PREMATURE_CONCLUSION_CN_RE.search(text)):
+                return True
+            # If the answer is just too short and sounds final, also retry.
+            # Look for period-ending sentences like "The binary is X." or
+            # "Analysis complete." without substantive content.
+            sentences = [s.strip() for s in text.replace("!", ".").replace("？", "。").split(".") if s.strip()]
+            if len(sentences) <= 3 and len(text) < 250:
+                return True
+
         # Check for self-direction language in the tail of the response.
         # Genuine self-correction phrases appear near the end; incidental
         # matches in a long complete answer are ignored.
@@ -285,7 +352,8 @@ The user's request follows below.
 
     def _build_self_correction_prompt(self, last_response: str,
                                        original_task: str,
-                                       retry_num: int) -> str:
+                                       retry_num: int,
+                                       tools_used: int = 0) -> str:
         """Build a self-correction prompt to feed back as user input."""
         last = (last_response or "(no response)").strip()
         if len(last) > 500:
@@ -304,16 +372,33 @@ The user's request follows below.
                 "Put the tool name and arguments as JSON inside the tags.\n\n"
             )
 
+        # Detect shallow analysis — few tools + short answer
+        depth_hint = ""
+        if tools_used < 3 and len(last) < 400:
+            depth_hint = (
+                f"\n**NOTE:** You have only used {tools_used} tool(s) so far. "
+                "Before drawing conclusions, use more tools to gather and "
+                "cross-validate evidence. A single observation is rarely "
+                "enough for a reliable verdict. "
+                "Explore alternative explanations before settling on one.\n\n"
+            )
+
         return (
             f"[Auto-retry #{retry_num}]\n"
             f"Your previous response was: \"{last}\"\n\n"
             f"The original request was: \"{original_task}\"\n\n"
             f"{format_hint}"
+            f"{depth_hint}"
             f"You haven't fully completed this task yet. "
-            f"Analyze what went wrong or what's still missing. "
-            f"If enough evidence is available, synthesize the result now; "
-            f"otherwise take the next concrete tool action to move forward. "
-            f"Do not end with only intent such as 'I need to continue'."
+            f"Take the next concrete tool action to gather more evidence. "
+            f"Be thorough: explore alternative hypotheses, cross-validate "
+            f"findings with multiple tools, and don't settle for the first "
+            f"interesting result. A good analysis uses 5+ tool calls to "
+            f"triangulate evidence.\n\n"
+            f"If you already have sufficient evidence, synthesize it into "
+            f"a complete, structured answer with confidence levels and "
+            f"specific evidence citations. "
+            f"Do NOT end with only intent or a plan."
         )
 
     # ── Core agent loop ───────────────────────────────────────────
@@ -452,13 +537,42 @@ The user's request follows below.
 
         Returns (final_text, exhausted) where exhausted=True means
         max_tool_rounds was reached before the model produced a final answer.
+
+        Prevents premature exit: if the model tries to give a final answer
+        before using at least min_tool_rounds tools, it gets pushed to explore
+        more (up to 2 consecutive pushes before giving up).
         """
         self._prepare_ida_mcp_tools()
         tool_schemas = self.tools.to_schemas()
 
+        tools_used = 0
+        no_tool_streak = 0  # consecutive responses without tool calls
+        _soft_cap_warned = False  # only warn once when approaching max rounds
+
         for round_num in range(self.config.max_tool_rounds):
             if self.debug:
                 self._debug_round_header(round_num)
+
+            # Soft-cap synthesis push: when approaching 80% of max rounds,
+            # inject a one-time hint to start wrapping up.
+            if not _soft_cap_warned and round_num >= int(self.config.max_tool_rounds * 0.75):
+                _soft_cap_warned = True
+                remaining_rounds = self.config.max_tool_rounds - round_num
+                self._history.append({
+                    "role": "user",
+                    "content": (
+                        f"[Synthesis window — {remaining_rounds} rounds remaining]\n"
+                        f"You are approaching the conversation limit. Begin synthesizing "
+                        f"your findings now. Structure by finding (not by tool), include "
+                        f"confidence levels, and note any unverified gaps. "
+                        f"Make any remaining high-value tool calls first, then produce "
+                        f"your final conclusion. Say TASK COMPLETE when done."
+                    ),
+                })
+                self._safe_print(
+                    f" [cyan]~ synthesis window[/] "
+                    f"[dim]{remaining_rounds} rounds remaining, time to wrap up[/]"
+                )
 
             # Auto-compress if context is getting too long
             if self.config.auto_compress:
@@ -480,16 +594,66 @@ The user's request follows below.
             if response.text:
                 self._safe_print()
 
-            # If no tool calls, we're done
+            # ── No tool calls → model thinks it's done ──────────────
             if not response.tool_calls:
                 text = response.text.strip() if response.text else ""
                 if not text:
                     text = "[no text response]"
+
+                # Guard: if too few tools used, push for more exploration.
+                # Allow up to 2 consecutive "no" answers before accepting
+                # (prevents infinite loops for genuinely simple queries).
+                min_tools = getattr(self.config, "min_tool_rounds", 5)
+                if tools_used < min_tools and no_tool_streak < 2:
+                    no_tool_streak += 1
+                    self._history.append({
+                        "role": "assistant",
+                        "content": text if text != "[no text response]" else "(acknowledged)",
+                    })
+                    remaining = min_tools - tools_used
+                    # Build a balanced prompt: push to explore, but give an exit path
+                    if tools_used >= 3 and len(text) >= 300:
+                        # Already have some evidence — offer synthesis as alternative
+                        action_hint = (
+                            f"Either use {remaining} more tool(s) to gather additional "
+                            f"evidence, OR if you already have cross-validated findings "
+                            f"with 5+ concrete evidence items, synthesize a thorough "
+                            f"conclusion now. Include confidence levels and note any gaps."
+                        )
+                    else:
+                        action_hint = (
+                            f"Use at least {remaining} more tool(s) to gather concrete "
+                            f"evidence before presenting a final answer. Cross-reference "
+                            f"multiple sources. Explore alternative hypotheses."
+                        )
+                    self._history.append({
+                        "role": "user",
+                        "content": (
+                            f"[Exploration required — {remaining} more tool(s) needed]\n"
+                            f"You have only used {tools_used} tool(s) so far. "
+                            f"{action_hint}\n\n"
+                            f"Termination criteria reminder:\n"
+                            f"- Findings confirmed by 2+ independent tools\n"
+                            f"- Specific IOCs/evidence (hashes, IPs, APIs, paths, strings)\n"
+                            f"- Alternative hypotheses tested\n"
+                            f"- 5+ concrete cited evidence items\n"
+                            f"- Say TASK COMPLETE when done"
+                        ),
+                    })
+                    self._safe_print(
+                        f" [cyan]~ exploring[/] "
+                        f"[dim]need {remaining} more tool(s) "
+                        f"({tools_used}/{min_tools} used)[/]"
+                    )
+                    continue
+
+                # Enough tools used (or model stubborn), accept the answer
                 self._history.append({"role": "assistant", "content": text})
                 self._auto_save()
                 return text, False
 
-            # Build assistant message with tool calls
+            # ── Model made tool calls → execute them ────────────────
+            no_tool_streak = 0  # reset streak when model uses tools
             self._history.append(
                 self.provider.format_assistant_message(response.text, response.tool_calls)
             )
@@ -503,6 +667,7 @@ The user's request follows below.
                     "content": result,
                     "is_error": result.startswith("Error") or "error" in result.lower()[:20],
                 })
+            tools_used += len(tool_results)
 
             # Add tool results in provider's format
             self._history.extend(self.provider.format_tool_results(tool_results))
@@ -542,35 +707,45 @@ The user's request follows below.
                 self._auto_save()
                 return message
 
+            # Calculate tools used in this correction round so far
+            tools_used = self._tool_calls_total - int(tools_before)
+
             # Check if we should self-correct
-            needs_correction = self._should_self_correct(final_text, exhausted, correction_round)
+            needs_correction = self._should_self_correct(
+                final_text, exhausted, correction_round, tools_used
+            )
             if needs_correction and correction_round < max_correction_rounds - 1:
                 self_prompt = self._build_self_correction_prompt(
-                    final_text, original_message, correction_round + 1
+                    final_text, original_message, correction_round + 1, tools_used
                 )
                 self._history.append({"role": "user", "content": self_prompt})
                 self._auto_save()
 
                 self._safe_print(
                     f" [cyan]~ auto-retry {correction_round + 1}[/] "
-                    f"[dim]self-correcting...[/]"
+                    f"[dim]self-correcting (used {tools_used} tools)...[/]"
                 )
                 continue
 
             if needs_correction:
                 self._safe_print(
                     " [cyan]~ final continuation[/] "
-                    "[dim]forcing synthesis or next concrete action...[/]"
+                    "[dim]forcing thorough synthesis...[/]"
                 )
                 self._history.append({
                     "role": "user",
                     "content": (
                         "[Final continuation]\n"
-                        "The previous response still did not complete the task. "
-                        "Do one final continuation: either produce the best evidence-based "
-                        "answer from the current tool results, or make exactly one more "
-                        "high-value tool call and then summarize. Do not stop with only "
-                        "a plan or intent statement."
+                        "The previous response still did not complete the task adequately. "
+                        "You MUST now produce the best evidence-based answer possible. "
+                        "If you have tool results, synthesize them into a thorough, "
+                        "structured analysis with:\n"
+                        "- Specific evidence from tool outputs (hashes, strings, APIs, paths)\n"
+                        "- Confidence levels for key claims (high/medium/low)\n"
+                        "- Alternative hypotheses you considered and why you ruled them out\n"
+                        "- Any gaps you acknowledge\n\n"
+                        "Be thorough — a short answer is worse than a slightly longer "
+                        "well-evidenced one. Do NOT end with a plan or intent statement."
                     ),
                 })
                 self._auto_save()

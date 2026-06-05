@@ -97,7 +97,8 @@ class PermissionConfig:
 class Config:
     provider: ProviderConfig = field(default_factory=ProviderConfig)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
-    max_tool_rounds: int = 50
+    max_tool_rounds: int = 80
+    min_tool_rounds: int = 5        # minimum tools before model can produce a final answer (prevents shallow analysis)
     self_correction: bool = True
     max_self_correction_rounds: int = 3
     max_work_cycles: int = 20
@@ -345,7 +346,7 @@ class Config:
 
         # ── Flat fields ──────────────────────────────────────────
         for key in (
-            "max_tool_rounds", "self_correction", "max_self_correction_rounds",
+            "max_tool_rounds", "min_tool_rounds", "self_correction", "max_self_correction_rounds",
             "max_work_cycles", "smart_work", "confirm_plan", "show_diffs",
             "max_diff_lines", "tool_preview_lines", "tool_preview_chars",
             "search_backend", "ida_path", "ghidra_path", "die_path",
