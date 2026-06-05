@@ -193,12 +193,19 @@ class ExternalStaticAnalyzeTool(Tool):
     def __init__(self, config=None):
         self.config = config
 
+    _CONFIG_PATH_MAP = {
+        "capa": "capa_path",
+        "die": "die_path",
+        "floss": "floss_path",
+        "exiftool": "exiftool_path",
+    }
+
     def _resolve_analyzer(self, name: str, spec: dict) -> str | None:
         configured = ""
-        if name == "die" and self.config is not None:
-            configured = getattr(self.config, "die_path", "") or ""
-        elif name == "exiftool" and self.config is not None:
-            configured = getattr(self.config, "exiftool_path", "") or ""
+        if self.config is not None:
+            attr = self._CONFIG_PATH_MAP.get(name)
+            if attr:
+                configured = getattr(self.config, attr, "") or ""
         if configured and Path(configured).exists():
             return str(Path(configured))
         return shutil.which(spec["exe"])
