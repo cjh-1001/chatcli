@@ -36,6 +36,8 @@ reverse = [
     "capstone>=5.0.0",
     "unicorn>=2.0.0",
     "yara-python>=4.5.0",
+    "ssdeep>=3.4.0",
+    "python-magic>=0.4.0",
 ]
 
 # Everything: core + tiktoken + reverse
@@ -51,6 +53,8 @@ all = [
     "capstone>=5.0.0",
     "unicorn>=2.0.0",
     "yara-python>=4.5.0",
+    "ssdeep>=3.4.0",
+    "python-magic>=0.4.0",
 ]
 
 [project.scripts]
