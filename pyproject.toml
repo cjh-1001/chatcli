@@ -36,7 +36,7 @@ reverse = [
     "capstone>=5.0.0",
     "unicorn>=2.0.0",
     "yara-python>=4.5.0",
-    "ssdeep>=3.4.0",
+    "ppdeep>=1.0.0",
     "python-magic>=0.4.0",
 ]
 
@@ -53,7 +53,7 @@ all = [
     "capstone>=5.0.0",
     "unicorn>=2.0.0",
     "yara-python>=4.5.0",
-    "ssdeep>=3.4.0",
+    "ppdeep>=1.0.0",
     "python-magic>=0.4.0",
 ]
 
