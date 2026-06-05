@@ -183,6 +183,8 @@ def _map_commands(signals: list[Any], max_commands: int) -> list[dict[str, Any]]
         results.append({
             "category": category,
             "label": rule["label"],
+            "analysis_family": "command_control_exfil",
+            "family_label": "C2/远控/外传",
             "matched_terms": sorted(matched_terms),
             "command_ids": local_ids[:12],
             "global_command_ids": all_command_ids[:24],
@@ -291,6 +293,8 @@ class CommandCapabilityMapTool(Tool):
             "command_capabilities": [
                 {
                     "category": item["label"],
+                    "analysis_family": item.get("analysis_family", "command_control_exfil"),
+                    "family_label": item.get("family_label", "C2/远控/外传"),
                     "technique": ", ".join(item["matched_terms"]),
                     "evidence": "\n".join(f"- {ev}" for ev in item["evidence"][:6]),
                     "impact": item["impact"],

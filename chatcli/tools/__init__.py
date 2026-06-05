@@ -39,6 +39,7 @@ from .evidence_graph import EvidenceGraphTool
 from .behavior_validator import BehaviorClaimValidatorTool, BehaviorCoverageMatrixTool
 from .command_capability import CommandCapabilityMapTool
 from .attack_technique import AttackTechniqueMapperTool
+from .attack_technique_plan import AttackTechniquePlannerTool
 from .malware_share import MalwareSharePackageTool
 from .internal import ChatcliAutoRequestTool
 from .tool_health import ToolHealthCheckTool
@@ -89,6 +90,7 @@ def create_registry(config=None) -> ToolRegistry:
         BehaviorClaimValidatorTool(),
         BehaviorCoverageMatrixTool(),
         CommandCapabilityMapTool(),
+        AttackTechniquePlannerTool(),
         AttackTechniqueMapperTool(),
         MalwareSharePackageTool(),
         ReverseTechniqueMapTool(),
@@ -122,6 +124,7 @@ __all__ = [
     "AttackChainBuilderTool", "EvidenceGraphTool",
     "BehaviorClaimValidatorTool", "BehaviorCoverageMatrixTool",
     "CommandCapabilityMapTool", "AttackTechniqueMapperTool",
+    "AttackTechniquePlannerTool",
     "MalwareSharePackageTool",
     "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",

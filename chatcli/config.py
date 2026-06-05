@@ -30,7 +30,7 @@ DEFAULT_AUTO_TOOLS = [
     "obfuscated_data_map", "behavior_capability_map",
     "attack_chain_builder", "evidence_graph",
     "behavior_claim_validator", "behavior_coverage_matrix",
-    "command_capability_map", "attack_technique_mapper",
+    "command_capability_map", "attack_technique_planner", "attack_technique_mapper",
     "reverse_technique_map", "reverse_evidence_map",
 ]
 DEFAULT_ASK_TOOLS = [
@@ -46,7 +46,7 @@ BUILTIN_AUTO_TOOLS = (
     "binary_hexdump", "encoded_string_extract", "obfuscated_data_map",
     "behavior_capability_map", "attack_chain_builder",
     "evidence_graph", "behavior_claim_validator", "behavior_coverage_matrix",
-    "command_capability_map", "attack_technique_mapper",
+    "command_capability_map", "attack_technique_planner", "attack_technique_mapper",
     "reverse_technique_map", "reverse_evidence_map",
 )
 BUILTIN_ASK_TOOLS = (

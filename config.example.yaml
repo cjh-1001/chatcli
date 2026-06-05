@@ -41,6 +41,7 @@ permissions:
     - behavior_claim_validator
     - behavior_coverage_matrix
     - command_capability_map
+    - attack_technique_planner
     - attack_technique_mapper
     - reverse_technique_map
     - reverse_evidence_map

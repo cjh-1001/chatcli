@@ -2,7 +2,9 @@ import unittest
 
 from chatcli.tools.behavior_capability import _match_capabilities
 from chatcli.tools.behavior_validator import BehaviorCoverageMatrixTool
+from chatcli.tools.attack_chain import AttackChainBuilderTool
 from chatcli.tools.attack_technique import _build_mappings
+from chatcli.tools.attack_technique_plan import AttackTechniquePlannerTool
 from chatcli.tools.command_capability import _map_commands
 
 
@@ -398,6 +400,8 @@ class CommandCapabilityTests(unittest.TestCase):
         shell = _command_by_category(commands, "shell_execution")
         self.assertEqual(shell["matched_terms"], ["powershell"])
         self.assertEqual(shell["confidence"], "low")
+        self.assertEqual(shell["analysis_family"], "command_control_exfil")
+        self.assertEqual(shell["family_label"], "C2/远控/外传")
 
     def test_uninstall_does_not_also_match_install(self):
         commands = _map_commands(["uninstall"], max_commands=10)
@@ -420,11 +424,43 @@ class BehaviorCoverageMatrixTests(unittest.TestCase):
         self.assertIn("entry_execution", result.metadata["report_hints"]["family_counts"])
 
 
+class AttackTechniquePlannerTests(unittest.TestCase):
+    def test_planner_builds_family_first_queue(self):
+        capabilities = _match_capabilities(
+            [{"value": "URLDownloadToFile silent download download and execute", "source": "pseudocode"}],
+            max_results=10,
+        )
+
+        result = AttackTechniquePlannerTool().execute(capabilities=capabilities)
+
+        self.assertFalse(result.is_error)
+        self.assertIn("analysis_plan", result.metadata)
+        family = result.metadata["analysis_plan"][0]
+        self.assertEqual(family["family"], "entry_execution")
+        self.assertEqual(family["label"], "入口/执行/载荷链")
+        self.assertTrue(family["candidates"])
+
+
 class AttackTechniqueMappingTests(unittest.TestCase):
+    def test_attack_chain_preserves_family_fields(self):
+        capabilities = _match_capabilities(
+            [{"value": "URLDownloadToFile silent download download and execute", "source": "pseudocode"}],
+            max_results=10,
+        )
+
+        result = AttackChainBuilderTool().execute(capabilities=capabilities, max_steps=10)
+
+        self.assertFalse(result.is_error)
+        step = result.metadata["steps"][0]
+        self.assertEqual(step["analysis_family"], "entry_execution")
+        self.assertEqual(step["family_label"], "入口/执行/载荷链")
+
     def test_mapping_uses_lower_attack_chain_confidence(self):
         capabilities = [{
             "category": "lotl_abuse",
             "label": "Living-off-the-land 工具滥用迹象",
+            "analysis_family": "entry_execution",
+            "family_label": "入口/执行/载荷链",
             "matched_terms": ["mshta", "rundll32"],
             "evidence": ["mshta launches rundll32 from decoded command table"],
             "confidence": "high",
@@ -441,6 +477,8 @@ class AttackTechniqueMappingTests(unittest.TestCase):
         self.assertEqual(issues, [])
         self.assertEqual(mappings[0]["status"], "hypothesis")
         self.assertEqual(mappings[0]["confidence"], "low")
+        self.assertEqual(mappings[0]["analysis_family"], "entry_execution")
+        self.assertEqual(mappings[0]["family_label"], "入口/执行/载荷链")
 
 
 if __name__ == "__main__":

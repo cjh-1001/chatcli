@@ -42,6 +42,7 @@ BUILT_IN_TOOLS = {
     "behavior_claim_validator",
     "behavior_coverage_matrix",
     "command_capability_map",
+    "attack_technique_planner",
     "attack_technique_mapper",
     "malware_share_package",
     "reverse_technique_map",
