@@ -547,6 +547,22 @@ class WorkCommandMixin:
         max_cycles: int | None = None,
     ):
         max_cycles = max_cycles or self._max_work_cycles()
+        # Auto-approve tools during automated work modes — the user
+        # explicitly started this task and shouldn't need to press
+        # Enter for every tool call.
+        saved_auto_approve = self.agent.auto_approve
+        self.agent.auto_approve = True
+        try:
+            return self._run_work_loop_inner(first_prompt, allow_pauses, max_cycles)
+        finally:
+            self.agent.auto_approve = saved_auto_approve
+
+    def _run_work_loop_inner(
+        self,
+        first_prompt: str,
+        allow_pauses: bool,
+        max_cycles: int,
+    ):
         prompt = first_prompt
         pending_compression_events: list[dict] = []
         task_id = self._current_task_id()
