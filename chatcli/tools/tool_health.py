@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from .base import Tool, ToolResult, coerce_bool, coerce_str_list
@@ -21,16 +22,33 @@ BUILT_IN_TOOLS = {
     "glob",
     "grep",
     "list_dir",
+    "web_search",
+    "web_fetch",
+    "ip_lookup",
+    "json_extract",
+    "ioc_quality_classifier",
+    "detection_rule_lint",
+    "git_status",
+    "git_diff",
     "binary_inspect",
     "binary_find",
     "binary_hexdump",
     "binary_patch",
     "encoded_string_extract",
     "obfuscated_data_map",
+    "behavior_capability_map",
+    "attack_chain_builder",
+    "evidence_graph",
+    "behavior_claim_validator",
+    "behavior_coverage_matrix",
+    "command_capability_map",
+    "attack_technique_mapper",
     "reverse_technique_map",
     "reverse_evidence_map",
     "runtime_string_hooks",
     "external_static_analyze",
+    "tool_health_check",
+    "chatcli_auto_request",
 }
 
 EXECUTABLE_PROBES = {
@@ -45,8 +63,31 @@ EXECUTABLE_PROBES = {
     "yara": ["yara"],
     "upx": ["upx"],
     "frida": ["frida"],
+    "tshark": ["tshark"],
+    "tcpdump": ["tcpdump"],
+    "strings": ["strings"],
+    "file": ["file"],
+    "objdump": ["objdump"],
+    "readelf": ["readelf"],
+    "radare2": ["r2", "radare2"],
+    "rizin": ["rizin", "rz-bin"],
     "dotnet": ["dotnet"],
     "ilspycmd": ["ilspycmd"],
+    "java": ["java"],
+    "jadx": ["jadx"],
+    "apktool": ["apktool"],
+    "node": ["node"],
+    "npm": ["npm"],
+}
+
+PYTHON_PACKAGE_PROBES = {
+    "angr": "angr",
+    "frida-python": "frida",
+    "pefile": "pefile",
+    "lief": "lief",
+    "capstone": "capstone",
+    "unicorn": "unicorn",
+    "yara-python": "yara",
 }
 
 TOOL_DEPENDENCIES = {
@@ -60,6 +101,22 @@ TOOL_DEPENDENCIES = {
     "external_static_analyze": ["capa", "die", "floss", "exiftool"],
     "yara_scan": ["yara"],
     "upx_unpack": ["upx"],
+    "runtime_string_hooks": ["frida"],
+}
+
+INSTALL_HINTS = {
+    "capa": "Install flare-capa or use the reverse extra when available.",
+    "floss": "Install flare-floss for decoded string extraction.",
+    "die": "Install Detect It Easy CLI and configure die_path if it is not on PATH.",
+    "exiftool": "Install ExifTool and configure exiftool_path if needed.",
+    "yara": "Install YARA CLI for rule scanning.",
+    "upx": "Install UPX only when UPX unpacking is needed.",
+    "tshark": "Install Wireshark/tshark for packet capture triage.",
+    "jadx": "Install jadx for APK and Android DEX analysis.",
+    "apktool": "Install apktool for Android resource and manifest inspection.",
+    "ilspycmd": "Install ilspycmd for .NET decompilation workflows.",
+    "angr": "Install the reverse dependencies if symbolic execution triage is needed.",
+    "frida": "Install frida-tools for local runtime instrumentation workflows.",
 }
 
 
@@ -90,17 +147,38 @@ def _version(exe: str, timeout: float = 3.0) -> str:
     return ""
 
 
+def _probe_python_package(name: str, import_name: str, include_versions: bool) -> dict[str, object]:
+    try:
+        __import__(import_name)
+    except Exception as exc:
+        return {
+            "name": name,
+            "kind": "python-package",
+            "available": False,
+            "path": "",
+            "error": type(exc).__name__,
+        }
+    row: dict[str, object] = {
+        "name": name,
+        "kind": "python-package",
+        "available": True,
+        "path": f"python import: {import_name}",
+    }
+    if include_versions:
+        try:
+            row["version"] = importlib_metadata.version(name)
+        except Exception:
+            row["version"] = ""
+    return row
+
+
 def _probe_external(name: str, include_versions: bool, config=None) -> dict[str, object]:
     if name == "ida":
         path = _find_ida(getattr(config, "ida_path", "") if config else "")
     elif name == "ghidra":
         path = _find_ghidra(getattr(config, "ghidra_path", "") if config else "")
     elif name == "angr":
-        try:
-            import angr  # noqa: F401
-            path = "python package: angr"
-        except Exception:
-            path = None
+        return _probe_python_package("angr", "angr", include_versions)
     elif name == "die":
         configured = getattr(config, "die_path", "") if config else ""
         path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
@@ -124,13 +202,6 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
 
 
 def _probe_tool(name: str, include_versions: bool, config=None) -> dict[str, object]:
-    if name in BUILT_IN_TOOLS:
-        return {
-            "name": name,
-            "kind": "built-in",
-            "available": True,
-            "path": "chatcli",
-        }
     if name in TOOL_DEPENDENCIES:
         deps = [_probe_external(dep, include_versions, config) for dep in TOOL_DEPENDENCIES[name]]
         available = any(dep["available"] for dep in deps) if name == "external_static_analyze" else all(dep["available"] for dep in deps)
@@ -140,6 +211,15 @@ def _probe_tool(name: str, include_versions: bool, config=None) -> dict[str, obj
             "available": available,
             "dependencies": deps,
         }
+    if name in BUILT_IN_TOOLS:
+        return {
+            "name": name,
+            "kind": "built-in",
+            "available": True,
+            "path": "chatcli",
+        }
+    if name in PYTHON_PACKAGE_PROBES:
+        return _probe_python_package(name, PYTHON_PACKAGE_PROBES[name], include_versions)
     if name in EXECUTABLE_PROBES or name in {"ida", "ghidra", "angr"}:
         return _probe_external(name, include_versions, config)
     return {
@@ -165,7 +245,7 @@ class ToolHealthCheckTool(Tool):
                 "description": (
                     "Optional names to check. Examples: ida, ida_analyze, binary_hexdump, "
                     "external_static_analyze, ghidra_analyze, angr_triage, yara_scan, "
-                    "upx_unpack, git, python, ilspycmd. "
+                    "upx_unpack, git, python, ilspycmd, jadx, apktool, tshark. "
                     "Default checks common reverse-analysis dependencies."
                 ),
                 "items": {"type": "string"},
@@ -187,7 +267,13 @@ class ToolHealthCheckTool(Tool):
             "py",
             "powershell",
             "git",
+            "web_fetch",
+            "ip_lookup",
             "ida",
+            "capa",
+            "die",
+            "floss",
+            "exiftool",
             "binary_inspect",
             "binary_find",
             "binary_hexdump",
@@ -200,8 +286,21 @@ class ToolHealthCheckTool(Tool):
             "angr_triage",
             "yara_scan",
             "upx_unpack",
+            "tshark",
+            "strings",
+            "file",
+            "objdump",
+            "readelf",
             "dotnet",
             "ilspycmd",
+            "java",
+            "jadx",
+            "apktool",
+            "frida",
+            "pefile",
+            "lief",
+            "capstone",
+            "unicorn",
         ]
         rows = [_probe_tool(str(name).strip(), include_versions, self.config) for name in requested if str(name).strip()]
 
@@ -221,8 +320,12 @@ class ToolHealthCheckTool(Tool):
                     dep_status = "OK" if dep.get("available") else "MISSING"
                     dep_path = f" path={dep.get('path')}" if dep.get("path") else ""
                     lines.append(f"  - {dep_status} {dep.get('name')}{dep_path}")
+                    if not dep.get("available") and dep.get("name") in INSTALL_HINTS:
+                        lines.append(f"    hint: {INSTALL_HINTS[dep.get('name')]}")
             if row.get("error"):
                 lines.append(f"  error: {row.get('error')}")
+            if not row.get("available") and row.get("name") in INSTALL_HINTS:
+                lines.append(f"  hint: {INSTALL_HINTS[row.get('name')]}")
 
         missing = [row["name"] for row in rows if not row.get("available")]
         if missing:

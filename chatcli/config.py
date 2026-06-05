@@ -24,9 +24,14 @@ def _bool_value(value, default: bool = False) -> bool:
 
 DEFAULT_AUTO_TOOLS = [
     "read_file", "glob", "grep", "list_dir", "web_search",
-    "web_fetch", "json_extract", "git_status", "git_diff", "binary_inspect",
+    "web_fetch", "ip_lookup", "json_extract", "ioc_quality_classifier",
+    "detection_rule_lint", "git_status", "git_diff", "binary_inspect",
     "binary_find", "binary_hexdump", "encoded_string_extract",
-    "obfuscated_data_map", "reverse_technique_map", "reverse_evidence_map",
+    "obfuscated_data_map", "behavior_capability_map",
+    "attack_chain_builder", "evidence_graph",
+    "behavior_claim_validator", "behavior_coverage_matrix",
+    "command_capability_map", "attack_technique_mapper",
+    "reverse_technique_map", "reverse_evidence_map",
 ]
 DEFAULT_ASK_TOOLS = [
     "bash", "write_file", "edit_file", "multi_edit", "ida_analyze",
@@ -36,8 +41,12 @@ DEFAULT_ASK_TOOLS = [
     "chatcli_auto_request",
 ]
 BUILTIN_AUTO_TOOLS = (
-    "json_extract", "git_status", "git_diff", "binary_inspect", "binary_find",
+    "ip_lookup", "json_extract", "ioc_quality_classifier", "detection_rule_lint",
+    "git_status", "git_diff", "binary_inspect", "binary_find",
     "binary_hexdump", "encoded_string_extract", "obfuscated_data_map",
+    "behavior_capability_map", "attack_chain_builder",
+    "evidence_graph", "behavior_claim_validator", "behavior_coverage_matrix",
+    "command_capability_map", "attack_technique_mapper",
     "reverse_technique_map", "reverse_evidence_map",
 )
 BUILTIN_ASK_TOOLS = (

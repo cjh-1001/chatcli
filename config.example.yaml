@@ -1,0 +1,116 @@
+# chatcli configuration example.
+# Keep real API keys and machine-local paths in ~/.chatcli/config.yaml or
+# .chatcli/config.yaml. Those local files are intentionally ignored by Git.
+
+provider:
+  provider: anthropic        # anthropic | openai | openai-compatible | text-tools
+  model: claude-sonnet-4-6
+  # api_key: sk-...          # Prefer CHATCLI_API_KEY / provider-specific env vars
+  # api_base: https://...    # For custom endpoints (Ollama, vLLM, etc.)
+  max_tokens: 8192
+  thinking: true
+  thinking_budget: 4096
+
+permissions:
+  auto:
+    - read_file
+    - glob
+    - grep
+    - list_dir
+    - web_search
+    - web_fetch
+    - ip_lookup
+    - json_extract
+    - ioc_quality_classifier
+    - detection_rule_lint
+    - git_status
+    - git_diff
+    - binary_inspect
+    - binary_find
+    - binary_hexdump
+    - encoded_string_extract
+    - obfuscated_data_map
+    - behavior_capability_map
+    - attack_chain_builder
+    - evidence_graph
+    - behavior_claim_validator
+    - behavior_coverage_matrix
+    - command_capability_map
+    - attack_technique_mapper
+    - reverse_technique_map
+    - reverse_evidence_map
+  ask:
+    - bash
+    - write_file
+    - edit_file
+    - multi_edit
+    - ida_analyze
+    - ida_focus_decompile
+    - ida_deobfuscate
+    - ida_mcp_ensure
+    - ida_mcp_probe
+    - ida_mcp_list_tools
+    - ida_mcp_call
+    - runtime_string_hooks
+    - external_static_analyze
+    - ghidra_analyze
+    - angr_triage
+    - yara_scan
+    - upx_unpack
+    - binary_patch
+    - chatcli_auto_request
+  deny: []
+  mode: default
+  protect_sensitive_files: true
+  sensitive:
+    - .env
+    - .env.*
+    - "*.pem"
+    - "*.key"
+    - "*_rsa"
+    - "*_dsa"
+    - id_rsa
+    - id_dsa
+    - credentials.*
+    - secrets.*
+    - .chatcli/config.yaml
+    - .chatcli/config.yml
+  path_rules: []
+
+max_tool_rounds: 50
+self_correction: true
+max_self_correction_rounds: 3
+max_work_cycles: 20
+smart_work: true
+confirm_plan: true
+show_diffs: true
+max_diff_lines: 80
+tool_preview_lines: 0
+tool_preview_chars: 800
+search_backend: auto
+
+# Reverse-analysis tool paths. Leave blank unless installed on this machine.
+# Use single quotes or forward slashes for Windows paths.
+ida_path: ""                 # Example: 'D:/IDA Pro/idat.exe'
+ghidra_path: ""              # Example: 'D:/Tools/ghidra_11.1.2_PUBLIC'
+die_path: ""                 # Example: 'D:/Tools/DetectItEasy/stuff/diec.exe'
+exiftool_path: ""            # Example: 'D:/Tools/exiftool.exe'
+upx_path: ""                 # Example: 'D:/Tools/upx.exe'
+
+ida_mcp_url: ""              # Example: http://127.0.0.1:13337/mcp
+ida_mcp_start_command: ""
+ida_mcp_auto_prepare: false
+ida_mcp_auto_start: false
+ida_mcp_tool_limit: 80
+
+auto_resume: false
+auto_compress: true
+compress_threshold: 80000
+max_retries: 3
+request_timeout: 120
+max_tool_output_chars: 40000
+temp_script_dir: .chatcli/tmp
+temp_script_name: scratch.py
+enforce_temp_script_iteration: true
+workspace: ""
+context_file: .chatcli/context.md

@@ -32,6 +32,8 @@ pip install -e ".[reverse]"
 py -3 -m pip install -r requirements-reverse.txt
 ```
 
+`requirements.txt` 和 `requirements-reverse.txt` 只是安装入口，实际依赖版本统一维护在 `pyproject.toml`。`requirements-reverse.txt` 没有并入 `requirements.txt`，是为了避免普通聊天/代码场景默认安装 `angr`、`frida`、`flare-capa` 这类体积更大、安装更慢的逆向依赖。
+
 `reverse` 会安装 Python 包类依赖：`angr`、`frida`/`frida-tools`、`flare-capa`、`flare-floss`。Ghidra、Detect It Easy、YARA、UPX、ExifTool 这类独立程序仍需要单独安装。
 
 ### 1.1 验证安装
@@ -251,62 +253,24 @@ pip install anthropic openai rich prompt-toolkit pyyaml httpx
 
 ## 配置示例
 
-`.chatcli/config.yaml` 示例：
+仓库里的 [config.example.yaml](config.example.yaml) 是无密钥完整模板，字段集合和 `chatcli --setup` 生成的默认配置保持一致，包括权限、上下文压缩、逆向工具路径、IDA MCP 和本地临时目录等配置。
+
+GitHub 上看不到你的 `.chatcli/config.yaml` 是正常现象：它包含 API key、本机绝对路径和会话状态，已经被 `.gitignore` 排除。不要把 `api_key`、真实网关地址或本机工具路径提交到 Git；这些值只写在本机的 `~/.chatcli/config.yaml` 或项目内 `.chatcli/config.yaml`。
+
+常用本机路径字段：
 
 ```yaml
-provider:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_base: ""
-  max_tokens: 8192
-  thinking: true
-  thinking_budget: 4096
-
-permissions:
-  auto:
-    - read_file
-    - glob
-    - grep
-    - list_dir
-    - git_status
-    - git_diff
-  ask:
-    - bash
-    - write_file
-    - edit_file
-    - multi_edit
-    - ida_mcp_ensure
-    - ida_mcp_probe
-    - ida_mcp_list_tools
-    - ida_mcp_call
-  deny: []
-  mode: default
-  protect_sensitive_files: true
-  sensitive:
-    - .env
-    - .env.*
-    - "*.pem"
-    - "*.key"
-    - id_rsa
-    - id_dsa
-
-max_tool_rounds: 50
-self_correction: true
-max_self_correction_rounds: 3
-show_diffs: true
-search_backend: auto
-ida_path: ""
-# Windows 示例，按自己的 Ghidra 解压目录修改：
-# ghidra_path: 'F:\ghidra_11.1.2_PUBLIC'
-ghidra_path: ""
-ida_mcp_url: ""
+ida_path: ""                 # Example: 'D:/IDA Pro/idat.exe'
+ghidra_path: ""              # Example: 'D:/Tools/ghidra_11.1.2_PUBLIC'
+die_path: ""                 # Example: 'D:/Tools/DetectItEasy/stuff/diec.exe'
+exiftool_path: ""            # Example: 'D:/Tools/exiftool.exe'
+upx_path: ""                 # Example: 'D:/Tools/upx.exe'
+ida_mcp_url: ""              # Example: http://127.0.0.1:13337/mcp
 ida_mcp_start_command: ""
 ida_mcp_auto_prepare: false
 ida_mcp_auto_start: false
 ida_mcp_tool_limit: 80
 ```
-
-不要把 `api_key` 写进这个文件后提交到 Git。确实要写本地 key 时，只写在本机的 `.chatcli/config.yaml`，并确认 `.chatcli/` 被 `.gitignore` 排除。
 
 ## Provider 配置
 

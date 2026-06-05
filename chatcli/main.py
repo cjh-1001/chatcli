@@ -37,6 +37,9 @@ permissions:
     - glob
     - grep
     - list_dir
+    - web_search
+    - web_fetch
+    - json_extract
     - git_status
     - git_diff
     - binary_inspect
@@ -45,12 +48,14 @@ permissions:
     - encoded_string_extract
     - obfuscated_data_map
     - reverse_technique_map
+    - reverse_evidence_map
   ask:                       # Ask before these tools
     - bash
     - write_file
     - edit_file
     - multi_edit
     - ida_analyze
+    - ida_focus_decompile
     - ida_deobfuscate
     - ida_mcp_ensure
     - ida_mcp_probe
@@ -72,8 +77,15 @@ permissions:
     - .env.*
     - "*.pem"
     - "*.key"
+    - "*_rsa"
+    - "*_dsa"
     - id_rsa
     - id_dsa
+    - credentials.*
+    - secrets.*
+    - .chatcli/config.yaml
+    - .chatcli/config.yml
+  path_rules: []
 
 max_tool_rounds: 50
 self_correction: true
@@ -109,6 +121,7 @@ max_tool_output_chars: 40000 # max chars per tool result fed into history
 temp_script_dir: .chatcli/tmp
 temp_script_name: scratch.py
 enforce_temp_script_iteration: true
+workspace: ""
 context_file: .chatcli/context.md
 """
 

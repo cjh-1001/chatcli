@@ -120,6 +120,50 @@ def _summarize_external_output(name: str, output: str) -> list[str]:
     return [f"- {line}" for line in compact]
 
 
+def _build_report_hints(target: Path, analyzer_results: list[dict]) -> dict[str, object]:
+    static_evidence = []
+    capability_candidates = []
+    limitations = []
+
+    for row in analyzer_results:
+        name = str(row.get("name", ""))
+        status = str(row.get("status", ""))
+        evidence = [str(item) for item in row.get("evidence_summary", []) if str(item).strip()]
+        if status == "ok" and evidence:
+            low_signal = any("no high-signal lines" in item.lower() for item in evidence)
+            confidence = "low" if low_signal else "medium"
+            static_evidence.append({
+                "tool": name,
+                "status": status,
+                "confidence": confidence,
+                "evidence": evidence[:12],
+                "notes": (
+                    "External static-analysis evidence. Treat as supporting evidence; "
+                    "validate with code paths, decoded config, or runtime telemetry before "
+                    "claiming confirmed behavior."
+                ),
+            })
+            capability_candidates.append({
+                "category": "外部静态分析",
+                "technique": f"{name}: {row.get('description', '')}",
+                "evidence": "\n".join(f"- {item}" for item in evidence[:8]),
+                "impact": "为能力判断提供辅助证据；不能单独证明运行时行为。",
+                "confidence": confidence,
+            })
+        elif status in {"missing", "timeout", "failed"}:
+            limitations.append({
+                "tool": name,
+                "status": status,
+                "notes": f"{name} did not produce usable evidence for {target.name}.",
+            })
+
+    return {
+        "static_tool_evidence": static_evidence,
+        "key_capability_candidates": capability_candidates,
+        "limitations": limitations,
+    }
+
+
 class ExternalStaticAnalyzeTool(Tool):
     name = "external_static_analyze"
     description = (
@@ -176,6 +220,7 @@ class ExternalStaticAnalyzeTool(Tool):
 
         timeout_sec = coerce_int(timeout, 180000, minimum=10000, maximum=900000) / 1000
         results = []
+        analyzer_results = []
         ran = 0
         missing = []
         for name in requested:
@@ -183,6 +228,13 @@ class ExternalStaticAnalyzeTool(Tool):
             exe = self._resolve_analyzer(name, spec)
             if not exe:
                 missing.append(name)
+                analyzer_results.append({
+                    "name": name,
+                    "status": "missing",
+                    "available": False,
+                    "path": "",
+                    "description": spec["description"],
+                })
                 continue
             cmd = spec["args"](target)
             cmd[0] = exe
@@ -197,6 +249,14 @@ class ExternalStaticAnalyzeTool(Tool):
                 )
             except subprocess.TimeoutExpired:
                 results.append(f"## {name}\nTimed out after {int(timeout_sec)}s.")
+                analyzer_results.append({
+                    "name": name,
+                    "status": "timeout",
+                    "available": True,
+                    "path": exe,
+                    "description": spec["description"],
+                    "timeout_seconds": int(timeout_sec),
+                })
                 continue
 
             ran += 1
@@ -205,9 +265,23 @@ class ExternalStaticAnalyzeTool(Tool):
                 output += ("\n[stderr]\n" + proc.stderr.strip())
             if not output:
                 output = "(no output)"
+            original_output_len = len(output)
+            truncated = False
             if len(output) > 50000:
                 output = output[:50000] + "\n... (truncated)"
+                truncated = True
             evidence = _summarize_external_output(name, output)
+            analyzer_results.append({
+                "name": name,
+                "status": "ok" if proc.returncode == 0 else "failed",
+                "available": True,
+                "path": exe,
+                "description": spec["description"],
+                "exit_code": proc.returncode,
+                "output_length": original_output_len,
+                "output_truncated": truncated,
+                "evidence_summary": [line.removeprefix("- ").strip() for line in evidence],
+            })
             results.append(
                 f"## {name}\n"
                 f"{spec['description']}\n"
@@ -219,13 +293,20 @@ class ExternalStaticAnalyzeTool(Tool):
             )
 
         if not ran and missing:
+            report_hints = _build_report_hints(target, analyzer_results)
             return ToolResult(
                 content=(
                     "No requested external analyzers were found on PATH. Missing: "
                     f"{', '.join(missing)}. Install one of: capa, diec, floss, exiftool."
                 ),
                 is_error=True,
-                metadata={"missing": missing, "ran": 0},
+                metadata={
+                    "path": str(target),
+                    "missing": missing,
+                    "ran": 0,
+                    "analyzers": analyzer_results,
+                    "report_hints": report_hints,
+                },
             )
 
         header = [
@@ -235,9 +316,16 @@ class ExternalStaticAnalyzeTool(Tool):
         ]
         if missing:
             header.append(f"Missing analyzers: {', '.join(missing)}")
+        report_hints = _build_report_hints(target, analyzer_results)
         return ToolResult(
             content="\n".join(header + [""] + results),
-            metadata={"path": str(target), "ran": ran, "missing": missing},
+            metadata={
+                "path": str(target),
+                "ran": ran,
+                "missing": missing,
+                "analyzers": analyzer_results,
+                "report_hints": report_hints,
+            },
         )
 
 

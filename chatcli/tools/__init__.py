@@ -11,7 +11,10 @@ from .grep import GrepTool
 from .list_dir import ListDirTool
 from .web_search import WebSearchTool
 from .web_fetch import WebFetchTool
+from .ip_lookup import IPLookupTool
 from .json_extract import JsonExtractTool
+from .ioc_quality import IocQualityClassifierTool
+from .detection_lint import DetectionRuleLintTool
 from .git_tools import GitStatusTool, GitDiffTool
 from .binary_inspect import BinaryInspectTool
 from .binary_search import BinaryFindTool, BinaryHexdumpTool
@@ -28,6 +31,12 @@ from .reverse import (
     RuntimeStringHooksTool,
 )
 from .data_obfuscation import ObfuscatedDataMapTool
+from .behavior_capability import BehaviorCapabilityMapTool
+from .attack_chain import AttackChainBuilderTool
+from .evidence_graph import EvidenceGraphTool
+from .behavior_validator import BehaviorClaimValidatorTool, BehaviorCoverageMatrixTool
+from .command_capability import CommandCapabilityMapTool
+from .attack_technique import AttackTechniqueMapperTool
 from .reverse_technique import ReverseTechniqueMapTool
 from .reverse_evidence import ReverseEvidenceMapTool
 from .internal import ChatcliAutoRequestTool
@@ -47,7 +56,10 @@ def create_registry(config=None) -> ToolRegistry:
         ListDirTool(),
         WebSearchTool(),
         WebFetchTool(),
+        IPLookupTool(),
         JsonExtractTool(),
+        IocQualityClassifierTool(),
+        DetectionRuleLintTool(),
         GitStatusTool(),
         GitDiffTool(),
         BinaryInspectTool(),
@@ -70,6 +82,13 @@ def create_registry(config=None) -> ToolRegistry:
         AngrTriageTool(),
         EncodedStringExtractTool(),
         ObfuscatedDataMapTool(),
+        BehaviorCapabilityMapTool(),
+        AttackChainBuilderTool(),
+        EvidenceGraphTool(),
+        BehaviorClaimValidatorTool(),
+        BehaviorCoverageMatrixTool(),
+        CommandCapabilityMapTool(),
+        AttackTechniqueMapperTool(),
         ReverseTechniqueMapTool(),
         ReverseEvidenceMapTool(),
         RuntimeStringHooksTool(),
@@ -88,7 +107,8 @@ __all__ = [
     "Tool", "ToolResult", "ToolRegistry",
     "BashTool", "ReadTool", "WriteTool", "EditTool",
     "MultiEditTool", "GlobTool", "GrepTool", "ListDirTool",
-    "WebSearchTool", "WebFetchTool", "JsonExtractTool",
+    "WebSearchTool", "WebFetchTool", "IPLookupTool", "JsonExtractTool",
+    "IocQualityClassifierTool", "DetectionRuleLintTool",
     "GitStatusTool", "GitDiffTool",
     "BinaryInspectTool", "BinaryFindTool", "BinaryHexdumpTool", "BinaryPatchTool",
     "IdaProbeTool", "IdaAnalyzeTool", "IdaFocusDecompileTool",
@@ -96,7 +116,11 @@ __all__ = [
     "GhidraProbeTool", "GhidraAnalyzeTool", "AngrTriageTool",
     "ExternalStaticAnalyzeTool", "YaraScanTool",
     "IdaDeobfuscateTool", "EncodedStringExtractTool", "RuntimeStringHooksTool",
-    "ObfuscatedDataMapTool", "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
+    "ObfuscatedDataMapTool", "BehaviorCapabilityMapTool",
+    "AttackChainBuilderTool", "EvidenceGraphTool",
+    "BehaviorClaimValidatorTool", "BehaviorCoverageMatrixTool",
+    "CommandCapabilityMapTool", "AttackTechniqueMapperTool",
+    "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",
     "create_registry",
 ]

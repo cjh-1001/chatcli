@@ -1,5 +1,6 @@
 """WebFetch tool — fetch a URL and extract readable content."""
 
+import json
 import re
 import httpx
 from urllib.parse import urlparse
@@ -123,11 +124,34 @@ def _summarize(content: str, prompt: str, max_len: int = 3000) -> str:
     return result
 
 
+def _looks_like_json(content_type: str, text: str) -> bool:
+    content_type = (content_type or "").lower()
+    if "json" in content_type or content_type.endswith("+json"):
+        return True
+    stripped = text.lstrip()
+    return stripped.startswith("{") or stripped.startswith("[")
+
+
+def _json_metadata(value):
+    if isinstance(value, dict):
+        return {
+            "json_type": "object",
+            "json_keys": list(value.keys())[:30],
+        }
+    if isinstance(value, list):
+        return {
+            "json_type": "array",
+            "json_length": len(value),
+            "json_sample_type": type(value[0]).__name__ if value else "empty",
+        }
+    return {"json_type": type(value).__name__}
+
+
 class WebFetchTool(Tool):
     name = "web_fetch"
     description = (
         "Fetch the content of a URL and extract readable text. "
-        "Returns the page content as plain text (HTML tags stripped). "
+        "Returns page content as plain text, structured JSON, or raw text. "
         "Max response size: 5MB. Timeout: 20s. "
         "Optionally provide a prompt to extract the most relevant "
         "sections of the page based on your question."
@@ -147,11 +171,23 @@ class WebFetchTool(Tool):
                     "instead of the full page content."
                 ),
             },
+            "mode": {
+                "type": "string",
+                "description": "Fetch mode: auto, text, json, or raw. Default auto.",
+                "enum": ["auto", "text", "json", "raw"],
+            },
         },
         "required": ["url"],
     }
 
-    def execute(self, url: str, prompt: str = "") -> ToolResult:
+    def execute(self, url: str, prompt: str = "", mode: str = "auto") -> ToolResult:
+        mode = (mode or "auto").strip().lower()
+        if mode not in {"auto", "text", "json", "raw"}:
+            return ToolResult(
+                content=f"Error: unsupported mode '{mode}'. Valid modes: auto, text, json, raw.",
+                is_error=True,
+            )
+
         # Validate URL
         try:
             parsed = urlparse(url)
@@ -191,9 +227,22 @@ class WebFetchTool(Tool):
                 is_error=True,
             )
 
+        response_metadata = {
+            "url": url,
+            "final_url": str(response.url),
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type", ""),
+            "content_length_bytes": len(response.content),
+        }
+
         # Check content type
         content_type = response.headers.get("content-type", "")
-        if "text/html" not in content_type and "text/plain" not in content_type:
+        content_type_lower = content_type.lower()
+        if (
+            mode == "text"
+            and "text/html" not in content_type_lower
+            and "text/plain" not in content_type_lower
+        ):
             # Still try to extract text — some sites have wrong content-type
             pass
 
@@ -206,17 +255,68 @@ class WebFetchTool(Tool):
 
         # Decode
         try:
-            html = response.text
+            raw_text = response.text
         except UnicodeDecodeError:
-            html = response.content.decode("latin-1", errors="replace")
+            raw_text = response.content.decode("latin-1", errors="replace")
+
+        if mode == "json" or (mode == "auto" and _looks_like_json(content_type, raw_text)):
+            try:
+                data = response.json()
+            except Exception as exc:
+                if mode == "json":
+                    return ToolResult(
+                        content=f"Error: Response is not valid JSON: {exc}",
+                        is_error=True,
+                        metadata=response_metadata,
+                    )
+            else:
+                text = json.dumps(data, ensure_ascii=False, indent=2)
+                original_len = len(text)
+                truncated = False
+                if len(text) > MAX_CONTENT_LENGTH:
+                    text = text[:MAX_CONTENT_LENGTH] + "\n... (JSON truncated)"
+                    truncated = True
+                metadata = {
+                    **response_metadata,
+                    **_json_metadata(data),
+                    "mode": "json",
+                    "content_length": original_len,
+                    "truncated": truncated,
+                    "prompt_used": False,
+                }
+                return ToolResult(content=text, metadata=metadata)
+
+        if mode == "raw":
+            text = raw_text
+            original_len = len(text)
+            truncated = False
+            if len(text) > MAX_CONTENT_LENGTH:
+                text = text[:MAX_CONTENT_LENGTH] + "\n... (raw content truncated)"
+                truncated = True
+            return ToolResult(
+                content=text,
+                metadata={
+                    **response_metadata,
+                    "mode": "raw",
+                    "content_length": original_len,
+                    "truncated": truncated,
+                    "prompt_used": False,
+                },
+            )
 
         # Extract text
-        text = _html_to_text(html)
+        if "text/html" in content_type_lower or "<html" in raw_text[:1000].lower():
+            text = _html_to_text(raw_text)
+        else:
+            text = raw_text.strip()
 
         if not text or not text.strip():
             return ToolResult(
-                content="No readable text content found on this page. It may be a JavaScript-only site or an image/media file.",
-                metadata={"url": url, "content_length": 0},
+                content=(
+                    "No readable text content found on this page. It may be a "
+                    "JavaScript-only site, JSON that failed to parse, or an image/media file."
+                ),
+                metadata={**response_metadata, "mode": "text", "content_length": 0},
             )
 
         # Apply prompt-based extraction if requested
@@ -232,7 +332,8 @@ class WebFetchTool(Tool):
         return ToolResult(
             content=text,
             metadata={
-                "url": url,
+                **response_metadata,
+                "mode": "text",
                 "content_length": original_len,
                 "truncated": original_len > MAX_CONTENT_LENGTH,
                 "prompt_used": bool(prompt),

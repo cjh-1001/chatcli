@@ -9,6 +9,9 @@ from .base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
 MAX_JSON_SIZE = 200 * 1024 * 1024
+STREAM_CHUNK_SIZE = 64 * 1024
+STREAM_BUFFER_TRIM = 1024 * 1024
+STREAM_MODES = {"stream_count", "stream_sample", "stream_filter"}
 
 
 def _short(text: Any, limit: int = 180) -> str:
@@ -59,6 +62,70 @@ def _iter_arrays(value: Any, prefix: str = ""):
             yield from _iter_arrays(item, child)
 
 
+def _read_more(handle, buffer: str, eof: bool) -> tuple[str, bool]:
+    if eof:
+        return buffer, eof
+    chunk = handle.read(STREAM_CHUNK_SIZE)
+    if chunk == "":
+        return buffer, True
+    return buffer + chunk, False
+
+
+def _stream_top_level_array(path: Path):
+    decoder = json.JSONDecoder()
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        buffer = ""
+        pos = 0
+        eof = False
+        started = False
+        while True:
+            buffer, eof = _read_more(handle, buffer, eof)
+            while True:
+                while pos < len(buffer) and buffer[pos].isspace():
+                    pos += 1
+                if pos >= len(buffer):
+                    if eof:
+                        if started:
+                            raise ValueError("unexpected end of JSON array")
+                        raise ValueError("empty JSON file")
+                    buffer = buffer[pos:]
+                    pos = 0
+                    break
+
+                if not started:
+                    if buffer.startswith("\ufeff", pos):
+                        pos += 1
+                        continue
+                    if buffer[pos] != "[":
+                        raise ValueError("stream modes require a top-level JSON array")
+                    pos += 1
+                    started = True
+                    continue
+
+                if buffer[pos] == "]":
+                    return
+                if buffer[pos] == ",":
+                    pos += 1
+                    continue
+
+                try:
+                    item, end = decoder.raw_decode(buffer, pos)
+                except json.JSONDecodeError:
+                    if eof:
+                        raise
+                    if pos > STREAM_BUFFER_TRIM:
+                        buffer = buffer[pos:]
+                        pos = 0
+                    buffer, eof = _read_more(handle, buffer, eof)
+                    continue
+
+                yield item
+                pos = end
+                if pos > STREAM_BUFFER_TRIM:
+                    buffer = buffer[pos:]
+                    pos = 0
+
+
 def _summarize(value: Any, prefix: str = "$", depth: int = 0, max_depth: int = 3) -> list[str]:
     if depth > max_depth:
         return []
@@ -101,8 +168,12 @@ class JsonExtractTool(Tool):
             "file_path": {"type": "string", "description": "JSON file path."},
             "mode": {
                 "type": "string",
-                "description": "summary, paths, or filter. Default summary.",
-                "enum": ["summary", "paths", "filter"],
+                "description": (
+                    "summary, paths, filter, stream_count, stream_sample, or "
+                    "stream_filter. Stream modes only support a top-level JSON array. "
+                    "Default summary."
+                ),
+                "enum": ["summary", "paths", "filter", "stream_count", "stream_sample", "stream_filter"],
             },
             "path": {
                 "type": "string",
@@ -141,12 +212,6 @@ class JsonExtractTool(Tool):
         if target.is_dir():
             return ToolResult(content=f"Path is a directory, not a JSON file: {file_path}", is_error=True)
         size = target.stat().st_size
-        if size > MAX_JSON_SIZE:
-            return ToolResult(content=f"Error: JSON file too large ({size} bytes).", is_error=True)
-        try:
-            data = json.loads(target.read_text(encoding="utf-8", errors="replace"))
-        except Exception as e:
-            return ToolResult(content=f"Error reading JSON: {e}", is_error=True)
 
         mode = (mode or "summary").lower()
         max_items = coerce_int(max_items, 40, minimum=1, maximum=500)
@@ -156,6 +221,64 @@ class JsonExtractTool(Tool):
 
         lines = ["# JSON Extract", "", f"Path: {target}", f"Size: {size} bytes", f"Mode: {mode}"]
         metadata = {"path": str(target), "size": size, "mode": mode}
+
+        if mode in STREAM_MODES:
+            if path and path not in {"$", "."}:
+                return ToolResult(
+                    content="Error: stream modes only support a top-level JSON array; omit path.",
+                    is_error=True,
+                )
+            try:
+                if mode == "stream_count":
+                    count = sum(1 for _ in _stream_top_level_array(target))
+                    lines.extend(["", f"Top-level array items: {count}"])
+                    metadata["items"] = count
+                    return ToolResult(content="\n".join(lines), metadata=metadata)
+
+                matches = []
+                scanned = 0
+                for item in _stream_top_level_array(target):
+                    scanned += 1
+                    if mode == "stream_sample" or _contains_keywords(item, keywords):
+                        matches.append(_project_item(item, fields))
+                    if len(matches) >= max_items:
+                        break
+            except Exception as e:
+                return ToolResult(content=f"Error streaming JSON: {e}", is_error=True, metadata=metadata)
+
+            label = "Sample Results" if mode == "stream_sample" else "Filter Results"
+            lines.extend([
+                "",
+                f"## {label}",
+                f"- Source path: top-level array",
+                f"- Items scanned: {scanned}",
+                f"- Items returned: {len(matches)}",
+            ])
+            if mode == "stream_filter":
+                lines.append(f"- Keywords: {', '.join(keywords) if keywords else '(none)'}")
+            lines.extend([
+                f"- Fields: {', '.join(fields) if fields else '(full item)'}",
+                "",
+                "```json",
+                json.dumps(matches, ensure_ascii=False, indent=2, default=str),
+                "```",
+            ])
+            metadata["scanned"] = scanned
+            metadata["matches"] = len(matches)
+            return ToolResult(content="\n".join(lines), metadata=metadata)
+
+        if size > MAX_JSON_SIZE:
+            return ToolResult(
+                content=(
+                    f"Error: JSON file too large ({size} bytes). Use stream_count, "
+                    "stream_sample, or stream_filter for top-level JSON arrays."
+                ),
+                is_error=True,
+            )
+        try:
+            data = json.loads(target.read_text(encoding="utf-8", errors="replace"))
+        except Exception as e:
+            return ToolResult(content=f"Error reading JSON: {e}", is_error=True)
 
         try:
             selected = _resolve_path(data, path) if path else data
