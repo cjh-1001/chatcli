@@ -225,13 +225,15 @@ def _read_config_data(config_file: Path) -> dict:
 
 
 # ── Tool path fields supported by the config ────────────────────────
-# (field, env_var, description)
+# (field, env_var, description, example)
 _TOOL_PATH_FIELDS = (
-    ("ida_path", "IDA_PATH", "IDA Pro 路径 (idat.exe)"),
-    ("ghidra_path", "GHIDRA_HEADLESS_PATH", "Ghidra 路径 (analyzeHeadless)"),
-    ("die_path", "DIE_PATH", "Detect It Easy 路径 (diec.exe)"),
-    ("exiftool_path", "EXIFTOOL_PATH", "ExifTool 路径 (exiftool.exe)"),
-    ("upx_path", "UPX_PATH", "UPX 路径 (upx.exe)"),
+    ("ida_path", "IDA_PATH", "IDA Pro 路径", '例如 D:/IDA Pro/idat.exe'),
+    ("ghidra_path", "GHIDRA_HEADLESS_PATH", "Ghidra 路径", '例如 D:/Tools/ghidra_11.1.2_PUBLIC'),
+    ("die_path", "DIE_PATH", "Detect It Easy 路径", '例如 D:/Tools/DetectItEasy/stuff/diec.exe'),
+    ("exiftool_path", "EXIFTOOL_PATH", "ExifTool 路径", '例如 D:/Tools/exiftool.exe'),
+    ("upx_path", "UPX_PATH", "UPX 路径", '例如 D:/Tools/upx.exe'),
+    ("capa_path", "CAPA_PATH", "capa 路径 (flare-capa)", '例如 D:/Tools/capa.exe'),
+    ("floss_path", "FLOSS_PATH", "FLOSS 路径 (flare-floss)", '例如 D:/Tools/floss.exe'),
 )
 
 
@@ -269,12 +271,13 @@ def _guide_tool_paths(config_file: Path) -> None:
     data = _read_config_data(config_file)
     paths: dict[str, str] = {}
 
-    for field, env_var, description in _TOOL_PATH_FIELDS:
+    for field, env_var, description, example in _TOOL_PATH_FIELDS:
         current = data.get(field, "") or _detected_tool_path(field, env_var)
         hint = f" [检测到: {current}]" if current else ""
         print(f"\n{description}")
         if env_var:
             print(f"  环境变量: {env_var}{hint}")
+        print(f"  {example}")
         value = _prompt_default("  路径（留空跳过）", "").strip()
         if value:
             paths[field] = value
