@@ -241,6 +241,8 @@ the output. You may then make additional tool calls or reply naturally.
 **Rules:**
 - Use exact <tool_call> XML tags with JSON inside
 - JSON must be valid (double quotes, no trailing commas)
+- **CRITICAL: Use ONLY the exact parameter names listed in each tool's "Required" and "Parameters" fields above. Never guess or invent parameter names.** For example, if a tool lists `Required: ["file_path", "content"]`, you MUST use `"file_path"` and `"content"` — do NOT substitute names like `path`, `workspace`, `text`, `target`, or any other variation.
+- Before making a tool call, check the Required list and include every required parameter
 - After receiving tool results, continue working or reply to the user
 - Do NOT wrap tool calls in markdown code blocks (no ```)
 
