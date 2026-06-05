@@ -224,6 +224,169 @@ def _read_config_data(config_file: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# ── Tool path fields supported by the config ────────────────────────
+# (field, env_var, description)
+_TOOL_PATH_FIELDS = (
+    ("ida_path", "IDA_PATH", "IDA Pro 路径 (idat.exe)"),
+    ("ghidra_path", "GHIDRA_HEADLESS_PATH", "Ghidra 路径 (analyzeHeadless)"),
+    ("die_path", "DIE_PATH", "Detect It Easy 路径 (diec.exe)"),
+    ("exiftool_path", "EXIFTOOL_PATH", "ExifTool 路径 (exiftool.exe)"),
+    ("upx_path", "UPX_PATH", "UPX 路径 (upx.exe)"),
+)
+
+
+def _detected_tool_path(field: str, env_var: str) -> str:
+    """Return a tool path from environment variables, preferring the
+    GHIDRA_HOME fallback for ghidra_path."""
+    value = os.environ.get(env_var, "")
+    if value:
+        return value
+    if field == "ghidra_path":
+        return os.environ.get("GHIDRA_HOME", "")
+    return ""
+
+
+def _write_tool_paths(config_file: Path, paths: dict[str, str]) -> None:
+    """Persist tool paths into an existing config file."""
+    data = _read_config_data(config_file)
+    for field, value in paths.items():
+        if value:
+            data[field] = value
+        else:
+            data.pop(field, None)
+    config_file.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _guide_tool_paths(config_file: Path) -> None:
+    """Interactive wizard for tool paths."""
+    print("\n" + "=" * 50)
+    print("  工具路径配置（全部可跳过，之后手动编辑配置文件或设环境变量即可）")
+    print("=" * 50)
+
+    data = _read_config_data(config_file)
+    paths: dict[str, str] = {}
+
+    for field, env_var, description in _TOOL_PATH_FIELDS:
+        current = data.get(field, "") or _detected_tool_path(field, env_var)
+        hint = f" [检测到: {current}]" if current else ""
+        print(f"\n{description}")
+        if env_var:
+            print(f"  环境变量: {env_var}{hint}")
+        value = _prompt_default("  路径（留空跳过）", "").strip()
+        if value:
+            paths[field] = value
+        elif current:
+            # Preserve the env-var-detected value in the config so it
+            # survives across sessions even if the env var is unset later.
+            paths[field] = current
+
+    if paths:
+        _write_tool_paths(config_file, paths)
+        print(f"\n工具路径已写入: {config_file}")
+    else:
+        print("\n跳过工具路径配置。")
+
+    return paths
+
+
+# ── IDA MCP defaults derived from ida_path ─────────────────────────
+
+_IDA_MCP_DEFAULT_URL = "http://127.0.0.1:13337/mcp"
+
+
+def _derive_ida_mcp_defaults(ida_path: str) -> dict[str, object]:
+    """Return sensible IDA MCP defaults when ida_path is configured.
+
+    Supports both GUI IDA MCP plugin (port 13337) and headless idalib-mcp.
+    The runtime probes the URL first; if unavailable and auto_start is enabled
+    it tries the start_command as a fallback — whichever works gets used.
+    """
+    return {
+        "ida_mcp_url": _IDA_MCP_DEFAULT_URL,
+        "ida_mcp_start_command": "py -m idalib_mcp.server --port 13337",
+        "ida_mcp_auto_prepare": True,
+        "ida_mcp_auto_start": True,
+        "ida_mcp_tool_limit": 80,
+    }
+
+
+def _guide_ida_mcp(config_file: Path, ida_path: str) -> None:
+    """Auto-configure IDA MCP settings derived from ida_path."""
+    print("\n" + "=" * 50)
+    print("  IDA MCP 连接配置（根据 ida_path 自动生成默认值）")
+    print("=" * 50)
+
+    data = _read_config_data(config_file)
+    defaults = _derive_ida_mcp_defaults(ida_path)
+
+    # ── MCP URL ──
+    current_url = data.get("ida_mcp_url") or os.environ.get("IDA_MCP_URL") or defaults["ida_mcp_url"]
+    env_hint = " [环境变量 IDA_MCP_URL]" if os.environ.get("IDA_MCP_URL") else ""
+    print(f"\nIDA MCP 服务地址{env_hint}")
+    url = _prompt_default(f"  URL", current_url).strip()
+    if not url:
+        url = current_url
+
+    # ── Start command ──
+    default_cmd = defaults.get("ida_mcp_start_command", "")
+    current_cmd = data.get("ida_mcp_start_command") or os.environ.get("IDA_MCP_START_COMMAND") or default_cmd
+    env_hint = " [环境变量 IDA_MCP_START_COMMAND]" if os.environ.get("IDA_MCP_START_COMMAND") else ""
+    print(f"\nIDA MCP 启动命令（headless 模式，GUI IDA 可留空）{env_hint}")
+    cmd = _prompt_default(f"  start_command", current_cmd).strip()
+
+    # ── Auto prepare ──
+    current_prepare = data.get("ida_mcp_auto_prepare")
+    if current_prepare is None:
+        current_prepare = defaults["ida_mcp_auto_prepare"]
+    print(f"\n启动时自动探测 IDA MCP 工具列表？")
+    auto_prepare = _prompt_default(f"  auto_prepare (true/false)", str(current_prepare).lower()).strip()
+    if auto_prepare:
+        auto_prepare_val = auto_prepare in {"true", "1", "yes", "y"}
+    else:
+        auto_prepare_val = bool(current_prepare)
+
+    # ── Auto start ──
+    current_start = data.get("ida_mcp_auto_start")
+    if current_start is None:
+        current_start = defaults["ida_mcp_auto_start"]
+    print(f"\nMCP 不可用时自动尝试启动？（需要 start_command）")
+    auto_start = _prompt_default(f"  auto_start (true/false)", str(current_start).lower()).strip()
+    if auto_start:
+        auto_start_val = auto_start in {"true", "1", "yes", "y"}
+    else:
+        auto_start_val = bool(current_start)
+
+    # ── Tool limit ──
+    current_limit = data.get("ida_mcp_tool_limit") or defaults["ida_mcp_tool_limit"]
+    print(f"\nMCP 工具数量上限")
+    limit_str = _prompt_default(f"  tool_limit", str(current_limit)).strip()
+    try:
+        tool_limit = int(limit_str)
+    except ValueError:
+        tool_limit = int(current_limit)
+
+    # ── Write ──
+    mcp_settings = {
+        "ida_mcp_url": url,
+        "ida_mcp_auto_prepare": auto_prepare_val,
+        "ida_mcp_auto_start": auto_start_val,
+        "ida_mcp_tool_limit": tool_limit,
+    }
+    if cmd:
+        mcp_settings["ida_mcp_start_command"] = cmd
+
+    data = _read_config_data(config_file)
+    data.update(mcp_settings)
+    config_file.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    print(f"\nIDA MCP 配置已写入: {config_file}")
+
+
 def _write_provider_settings(config_file: Path, settings: dict[str, str], preserve_template: bool) -> None:
     config_file.parent.mkdir(parents=True, exist_ok=True)
     if preserve_template:
@@ -284,6 +447,10 @@ def guide_config(config_file: Path, preserve_template: bool = False) -> None:
         preserve_template=preserve_template,
     )
     print(f"配置已更新：{config_file}")
+
+    tool_paths = _guide_tool_paths(config_file)
+    if tool_paths.get("ida_path"):
+        _guide_ida_mcp(config_file, tool_paths["ida_path"])
 
 
 def _first_run_config_file(config_file: Path | None = None) -> Path | None:

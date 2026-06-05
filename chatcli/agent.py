@@ -7,12 +7,48 @@ from rich.console import Console
 from rich.panel import Panel
 
 # On Windows, force stdout to flush on every newline so streaming
-# model output appears immediately instead of stalling until the
-# user presses Enter.
+# model output appears immediately instead of stalling.
+# Also disable Quick Edit mode — when a user accidentally clicks in
+# the console or selects text, the entire process blocks until Enter.
+# This is the #1 cause of "output pauses and needs Enter to continue".
 if sys.platform == "win32":
     try:
         if hasattr(sys.stdout, "reconfigure"):
             sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+    try:
+        import ctypes as _ctypes
+        from ctypes import wintypes as _wintypes
+
+        _ENABLE_QUICK_EDIT_MODE = 0x0040
+        _ENABLE_INSERT_MODE = 0x0020
+        _ENABLE_EXTENDED_FLAGS = 0x0080
+
+        _kernel32 = _ctypes.windll.kernel32
+
+        # ── Disable Quick Edit on input handle ──
+        _STD_INPUT = -10
+        _hin = _kernel32.GetStdHandle(_STD_INPUT)
+        if _hin and _hin != _wintypes.HANDLE(-1).value:
+            _old_in = _wintypes.DWORD()
+            if _kernel32.GetConsoleMode(_hin, _ctypes.byref(_old_in)):
+                _new_in = _old_in.value & ~_ENABLE_QUICK_EDIT_MODE
+                _new_in &= ~_ENABLE_INSERT_MODE
+                _new_in |= _ENABLE_EXTENDED_FLAGS
+                _kernel32.SetConsoleMode(_hin, _new_in)
+
+        # ── Ensure processed output on output handle ──
+        # ENABLE_PROCESSED_OUTPUT ensures \n → \r\n translation and
+        # prevents some buffering stalls on Windows.
+        _ENABLE_PROCESSED_OUTPUT = 0x0001
+        _STD_OUTPUT = -11
+        _hout = _kernel32.GetStdHandle(_STD_OUTPUT)
+        if _hout and _hout != _wintypes.HANDLE(-1).value:
+            _old_out = _wintypes.DWORD()
+            if _kernel32.GetConsoleMode(_hout, _ctypes.byref(_old_out)):
+                _new_out = _old_out.value | _ENABLE_PROCESSED_OUTPUT
+                _kernel32.SetConsoleMode(_hout, _new_out)
     except Exception:
         pass
 
