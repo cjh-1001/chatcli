@@ -101,7 +101,7 @@ TOOL_DEPENDENCIES = {
     "ghidra_analyze": ["ghidra"],
     "angr_triage": ["angr"],
     "external_static_analyze": ["capa", "die", "floss", "exiftool"],
-    "yara_scan": ["yara"],
+    "yara_scan": ["yara-python", "yara"],  # yara-python preferred, CLI fallback
     "upx_unpack": ["upx"],
     "runtime_string_hooks": ["frida"],
 }
@@ -199,6 +199,8 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
     elif name == "floss":
         configured = getattr(config, "floss_path", "") if config else ""
         path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+    elif name == "yara-python":
+        return _probe_python_package("yara-python", "yara", include_versions)
     else:
         path = _which_any(EXECUTABLE_PROBES.get(name, [name]))
     row: dict[str, object] = {
@@ -215,7 +217,7 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
 def _probe_tool(name: str, include_versions: bool, config=None) -> dict[str, object]:
     if name in TOOL_DEPENDENCIES:
         deps = [_probe_external(dep, include_versions, config) for dep in TOOL_DEPENDENCIES[name]]
-        available = any(dep["available"] for dep in deps) if name == "external_static_analyze" else all(dep["available"] for dep in deps)
+        available = any(dep["available"] for dep in deps) if name in ("external_static_analyze", "yara_scan") else all(dep["available"] for dep in deps)
         return {
             "name": name,
             "kind": "tool",

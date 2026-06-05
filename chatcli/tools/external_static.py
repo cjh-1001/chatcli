@@ -339,9 +339,10 @@ class ExternalStaticAnalyzeTool(Tool):
 class YaraScanTool(Tool):
     name = "yara_scan"
     description = (
-        "Run YARA rules against a local file or directory. "
-        "Configure yara_path in config, set the YARA_PATH env var, or ensure yara "
-        "is on PATH. Does not execute the target binary."
+        "Scan a file or directory with YARA rules. Uses the yara-python library "
+        "when installed (pip install yara-python), falling back to the external "
+        "yara/yara64 CLI. Supports inline rule text via rule_source, or a rule "
+        "file/directory via rules_path. Does not execute the target binary."
     )
     parameters = {
         "type": "object",
@@ -352,7 +353,11 @@ class YaraScanTool(Tool):
             },
             "rules_path": {
                 "type": "string",
-                "description": "Absolute path to a YARA rule file or rules directory.",
+                "description": "Path to a YARA rule file or directory. Required unless rule_source is provided.",
+            },
+            "rule_source": {
+                "type": "string",
+                "description": "Inline YARA rule text. Alternative to rules_path.",
             },
             "recursive": {
                 "type": "boolean",
@@ -360,16 +365,16 @@ class YaraScanTool(Tool):
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in milliseconds. Default 120000, max 600000.",
+                "description": "Timeout in milliseconds (only for external CLI fallback). Default 120000.",
             },
         },
-        "required": ["target_path", "rules_path"],
+        "required": ["target_path"],
     }
 
     def __init__(self, config=None):
         self.config = config
 
-    def _find_yara(self) -> str | None:
+    def _find_yara_exe(self) -> str | None:
         configured = getattr(self.config, "yara_path", "") if self.config else ""
         if configured and Path(configured).exists():
             return str(Path(configured))
@@ -379,29 +384,119 @@ class YaraScanTool(Tool):
                 return found
         return None
 
-    def execute(
-        self, target_path: str, rules_path: str, recursive: bool = True,
-        timeout: int = 120000, **kwargs
+    def _scan_python(
+        self, target: Path, rules_path: str | None, rule_source: str | None,
+        recursive: bool,
     ) -> ToolResult:
-        yara = self._find_yara()
+        """Scan using yara-python library."""
+        try:
+            import yara as yara_mod
+        except ImportError:
+            return None  # signal: fall back to CLI
+
+        # Compile rules
+        try:
+            if rule_source:
+                rules = yara_mod.compile(source=rule_source)
+            elif rules_path:
+                rules_path_obj = Path(rules_path)
+                if not rules_path_obj.exists():
+                    return ToolResult(
+                        content=f"Rules path not found: {rules_path}", is_error=True
+                    )
+                if rules_path_obj.is_dir():
+                    rules = yara_mod.compile(
+                        filepaths={
+                            str(p): str(p.relative_to(rules_path_obj))
+                            for p in rules_path_obj.rglob("*")
+                            if p.suffix in (".yar", ".yara")
+                        }
+                    )
+                    if not rules:
+                        return ToolResult(
+                            content=f"No .yar/.yara files found in {rules_path}",
+                            is_error=True,
+                        )
+                else:
+                    rules = yara_mod.compile(filepath=str(rules_path_obj))
+            else:
+                return ToolResult(
+                    content="Either rules_path or rule_source is required.",
+                    is_error=True,
+                )
+        except Exception as e:
+            return ToolResult(
+                content=f"YARA rule compilation failed: {e}", is_error=True
+            )
+
+        # Scan
+        try:
+            if target.is_dir():
+                matches = rules.match(str(target), timeout=60)
+            else:
+                matches = rules.match(str(target), timeout=60)
+        except Exception as e:
+            return ToolResult(
+                content=f"YARA scan error: {e}", is_error=True
+            )
+
+        if not matches:
+            return ToolResult(
+                content="(no matches)",
+                metadata={
+                    "engine": "yara-python",
+                    "target": str(target),
+                    "rules_matched": 0,
+                },
+            )
+
+        # Format output
+        lines = [f"# YARA Scan (yara-python)", f"", f"Target: {target}", ""]
+        rules_detail: list[dict] = []
+        for match in matches:
+            rule_detail = {
+                "rule": match.rule,
+                "namespace": getattr(match, "namespace", "default"),
+                "tags": list(getattr(match, "tags", [])),
+                "strings": [],
+            }
+            lines.append(f"{match.rule}")
+            for offset, identifier, data in getattr(match, "strings", []):
+                hex_data = data.hex() if isinstance(data, bytes) else str(data)
+                rule_detail["strings"].append({
+                    "offset": hex(offset),
+                    "identifier": identifier,
+                    "data": hex_data[:80],
+                })
+                lines.append(f"  0x{offset:x}:{identifier}: {hex_data[:80]}")
+            lines.append("")
+            rules_detail.append(rule_detail)
+
+        return ToolResult(
+            content="\n".join(lines).strip(),
+            metadata={
+                "engine": "yara-python",
+                "target": str(target),
+                "rules_matched": len(matches),
+                "rules": rules_detail,
+            },
+        )
+
+    def _scan_cli(
+        self, target: Path, rules_path: str, recursive: bool, timeout: int,
+    ) -> ToolResult:
+        """Fallback: scan using external yara CLI."""
+        yara = self._find_yara_exe()
         if not yara:
             return ToolResult(
-                content="YARA not found. Install yara64.exe and configure "
-                "yara_path in .chatcli/config.yaml, or add it to PATH.",
+                content="YARA not found. Install 'yara-python' (pip install yara-python) "
+                "or configure yara_path in .chatcli/config.yaml, or add yara64.exe to PATH.",
                 is_error=True,
             )
-        target = Path(target_path)
-        rules = Path(rules_path)
-        if not target.exists():
-            return ToolResult(content=f"Target not found: {target_path}", is_error=True)
-        if not rules.exists():
-            return ToolResult(content=f"Rules path not found: {rules_path}", is_error=True)
-
-        cmd = [yara]
+        cmd = [yara, "-s"]
         if recursive:
             cmd.append("-r")
-        cmd.extend([str(rules), str(target)])
-        recursive = coerce_bool(recursive, True)
+        cmd.extend([str(Path(rules_path)), str(target)])
         timeout_sec = coerce_int(timeout, 120000, minimum=10000, maximum=600000) / 1000
         try:
             proc = subprocess.run(
@@ -413,18 +508,48 @@ class YaraScanTool(Tool):
                 timeout=timeout_sec,
             )
         except subprocess.TimeoutExpired:
-            return ToolResult(content=f"YARA scan timed out after {int(timeout_sec)}s.", is_error=True)
-
+            return ToolResult(
+                content=f"YARA scan timed out after {int(timeout_sec)}s.", is_error=True
+            )
         output = (proc.stdout or "").strip()
         if proc.stderr:
             output += ("\n[stderr]\n" + proc.stderr.strip())
         if not output:
             output = "(no matches)"
         return ToolResult(
-            content=f"# YARA Scan\n\nTarget: {target}\nRules: {rules}\n\n{output}",
+            content=f"# YARA Scan (external CLI)\n\nTarget: {target}\nRules: {rules_path}\n\n{output}",
             is_error=proc.returncode not in (0, 1),
-            metadata={"target": str(target), "rules": str(rules), "exit_code": proc.returncode},
+            metadata={
+                "engine": "external",
+                "target": str(target),
+                "rules": str(rules_path),
+                "exit_code": proc.returncode,
+            },
         )
+
+    def execute(
+        self, target_path: str, rules_path: str | None = None,
+        rule_source: str | None = None, recursive: bool = True,
+        timeout: int = 120000, **kwargs,
+    ) -> ToolResult:
+        target = Path(target_path)
+        if not target.exists():
+            return ToolResult(content=f"Target not found: {target_path}", is_error=True)
+
+        # Try yara-python first (gives structured output, no subprocess)
+        if rule_source or (rules_path and Path(rules_path).exists()):
+            result = self._scan_python(target, rules_path, rule_source, recursive)
+            if result is not None:
+                return result
+
+        # Fall back to external CLI
+        if not rules_path:
+            return ToolResult(
+                content="Either rules_path or rule_source is required.", is_error=True
+            )
+        if not Path(rules_path).exists():
+            return ToolResult(content=f"Rules path not found: {rules_path}", is_error=True)
+        return self._scan_cli(target, rules_path, recursive, timeout)
 
 
 class UpxUnpackTool(Tool):
