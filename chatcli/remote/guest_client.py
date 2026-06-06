@@ -135,6 +135,19 @@ class GuestAgentClient:
 
         return str(extract_dir)
 
+    def exec_command(self, command: str, timeout: int = 300, workdir: str = "") -> dict:
+        """Execute an analysis command on the remote server via /api/v1/exec."""
+        body: dict = {"command": command, "timeout": timeout}
+        if workdir:
+            body["workdir"] = workdir
+        r = self.client.post(
+            f"{self.base_url}/api/v1/exec",
+            json=body,
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     def list_cases(self) -> dict:
         """List all cases."""
         r = self.client.get(

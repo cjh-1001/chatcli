@@ -14,6 +14,7 @@ class RemoteGuestTool(Tool):
         "Interact with the remote analysis Guest Agent on Tencent Cloud. "
         "This is the main channel for remote operations. Actions:\n"
         "  health    — Check if Guest Agent is running\n"
+        "  exec      — Execute an analysis command directly on the remote server\n"
         "  prepare   — Create a new analysis case\n"
         "  upload    — Upload sample file to a case\n"
         "  run       — Trigger static/dynamic analysis on uploaded sample\n"
@@ -21,7 +22,11 @@ class RemoteGuestTool(Tool):
         "  download  — Download all results as ZIP and extract locally\n"
         "  list      — List all cases on the remote server\n"
         "\n"
-        "Typical workflow:\n"
+        "Quick path (file already on remote server):\n"
+        "  exec command='binary_inspect C:\\samples\\mal.exe' → direct output\n"
+        "  exec command='capa C:\\samples\\mal.exe -j' → direct output\n"
+        "\n"
+        "Full workflow (file needs upload):\n"
         "  1. prepare → get case_id\n"
         "  2. upload case_id=<id> file_path=<sample>\n"
         "  3. run case_id=<id>  (may take minutes)\n"
@@ -35,7 +40,7 @@ class RemoteGuestTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["health", "prepare", "upload", "run", "status", "download", "list"],
+                "enum": ["health", "exec", "prepare", "upload", "run", "status", "download", "list"],
                 "description": "Action to perform.",
             },
             "case_id": {
@@ -108,6 +113,26 @@ class RemoteGuestTool(Tool):
                         f"Cases dir: {data.get('cases_dir', '?')}\n"
                         f"Auth: {'configured' if data.get('auth_configured') else 'MISSING'}"
                     ),
+                    metadata=data,
+                )
+
+            elif action == "exec":
+                command = kwargs.get("command", "") or file_path
+                if not command:
+                    return ToolResult(content="exec requires command='...'", is_error=True)
+                timeout = int(kwargs.get("timeout", 300))
+                workdir = output_dir or ""
+                data = client.exec_command(command, timeout=timeout, workdir=workdir)
+                exit_code = data.get("exit_code", -1)
+                stdout = data.get("stdout", "")
+                stderr = data.get("stderr", "")
+                elapsed = data.get("elapsed_ms", 0)
+                output = stdout
+                if stderr:
+                    output += f"\n[stderr]\n{stderr}"
+                return ToolResult(
+                    content=f"[exit={exit_code} | {elapsed}ms]\n{output}" if output else f"[exit={exit_code} | {elapsed}ms] (no output)",
+                    is_error=exit_code != 0,
                     metadata=data,
                 )
 

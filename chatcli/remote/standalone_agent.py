@@ -276,6 +276,26 @@ async def list_cases(authorization: str | None = Header(None)):
     return {"cases": cases, "total": len(cases)}
 
 
+@app.post("/api/v1/exec")
+async def exec_cmd(body: dict, authorization: str | None = Header(None)):
+    """Execute an analysis command on the remote server. Returns stdout/stderr/exit_code."""
+    _auth(authorization)
+    cmd = (body or {}).get("command", "")
+    if not cmd:
+        raise HTTPException(400, "command is required")
+    timeout = int((body or {}).get("timeout", 300))
+    workdir = (body or {}).get("workdir", str(BASE_DIR))
+    started = time.time()
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                          timeout=timeout, cwd=workdir)
+        return {"exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr,
+                "elapsed_ms": int((time.time() - started) * 1000)}
+    except subprocess.TimeoutExpired:
+        return {"exit_code": -1, "stdout": "", "stderr": f"timeout after {timeout}s",
+                "elapsed_ms": int((time.time() - started) * 1000)}
+
+
 @app.on_event("startup")
 async def _startup():
     for d in [CASES_DIR, OUTBOX_DIR]:
