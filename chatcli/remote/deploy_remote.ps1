@@ -2,13 +2,14 @@
 $ErrorActionPreference = "Stop"
 Write-Host "=== chatcli Remote Agent ===" -ForegroundColor Cyan
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+# Check Python (Windows uses 'py' launcher)
+if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
     Write-Host "请先装 Python 3.10+: https://python.org" -ForegroundColor Red; exit 1
 }
-Write-Host "Python: $(python --version)" -ForegroundColor Green
+Write-Host "Python: $(py -3 --version)" -ForegroundColor Green
 
 Write-Host "安装依赖..." -ForegroundColor Yellow
-pip install fastapi uvicorn python-multipart --quiet
+py -3 -m pip install fastapi uvicorn python-multipart --quiet
 Write-Host "完成" -ForegroundColor Green
 
 Write-Host "部署 Agent..." -ForegroundColor Yellow
@@ -37,4 +38,4 @@ Write-Host "    enabled: true" -ForegroundColor Gray
 Write-Host "    base_url: http://<IP>:8443" -ForegroundColor Gray
 Write-Host "    guest_agent_token: $token" -ForegroundColor Gray
 Write-Host ""
-python C:\chatcli_agent.py --host 0.0.0.0 --port 8443
+py -3 C:\chatcli_agent.py --host 0.0.0.0 --port 8443
