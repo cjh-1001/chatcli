@@ -64,12 +64,12 @@ if not AGENT_TOKEN:
 #   $env:CHATCLI_TOOL_YARA = "F:\reverseTools\yara64.exe"
 
 def _resolve_tool_paths() -> dict[str, str]:
-    """Read tool paths from environment variables, falling back to command name."""
+    """Read tool paths from environment variables, falling back to defaults."""
     defaults = {
         "python": sys.executable,
         "ida": r"C:\Program Files\IDA Professional 9.0\idat.exe",
-        "capa": r"C:\Program Files\reverseTools\capa.exe",
-        "floss": r"C:\Program Files\reverseTools\floss.exe",
+        "capa": f"\"{sys.executable}\" -m capa",
+        "floss": f"\"{sys.executable}\" -m floss",
         "yara": r"C:\Program Files\reverseTools\yara64.exe",
         "diec": r"C:\Program Files\reverseTools\diec.exe",
         "exiftool": r"C:\Program Files\reverseTools\exiftool.exe",
@@ -162,8 +162,11 @@ async def tools_list(authorization: str | None = Header(None)):
     _auth(authorization)
     tools = {}
     for name, path in sorted(TOOL_PATHS.items()):
-        exe = Path(path)
-        available = exe.is_file() if exe.is_absolute() else shutil.which(path) is not None
+        # Split out executable part for commands with args (e.g. "py -3 -m capa")
+        parts = path.split(None, 1)
+        exe_str = parts[0].strip('\"')
+        exe = Path(exe_str)
+        available = exe.is_file() if exe.is_absolute() else shutil.which(exe_str) is not None
         tools[name] = {"path": path, "available": available}
     return {"tools": tools}
 
@@ -340,7 +343,12 @@ async def exec_cmd(body: dict, authorization: str | None = Header(None)):
 async def _startup():
     for d in [CASES_DIR, OUTBOX_DIR]:
         d.mkdir(parents=True, exist_ok=True)
-    available = sum(1 for t in TOOL_PATHS.values() if Path(t).is_file() or shutil.which(t))
+    def _tool_available(tool_path: str) -> bool:
+        parts = tool_path.split(None, 1)
+        exe_str = parts[0].strip('"')
+        exe = Path(exe_str)
+        return exe.is_file() if exe.is_absolute() else shutil.which(exe_str) is not None
+    available = sum(1 for t in TOOL_PATHS.values() if _tool_available(t))
     print(f"chatcli Remote Agent v1.1.0")
     print(f"  Listening: {AGENT_HOST}:{AGENT_PORT}")
     print(f"  Cases:     {CASES_DIR}")
