@@ -118,10 +118,27 @@ class ToolRegistry:
         required = tool.parameters.get("required", [])
         missing = [k for k in required if k not in params or params[k] is None]
         if missing:
+            # Only report params that are part of this tool's schema so
+            # framework-injected keys like "workspace" don't mislead the
+            # error message.
+            tool_prop_names = set(tool.parameters.get("properties", {}).keys())
+            provided = [k for k in params if k in tool_prop_names]
+            descs = {}
+            for pname, pschema in tool.parameters.get("properties", {}).items():
+                if isinstance(pschema, dict) and pschema.get("description"):
+                    descs[pname] = pschema["description"]
+            missing_hints = []
+            for k in missing:
+                hint = descs.get(k, "")
+                if hint:
+                    missing_hints.append(f"{k} ({hint})")
+                else:
+                    missing_hints.append(k)
             return ToolResult(
                 content=(
-                    f"Error: missing required parameters for '{name}': {', '.join(missing)}. "
-                    f"Required: {required}. Provided: {list(params.keys())}."
+                    f"Error: missing required parameters for '{name}': {', '.join(missing_hints)}. "
+                    f"Required: {required}. "
+                    + (f"Provided: {provided}." if provided else "No matching parameters provided.")
                 ),
                 is_error=True,
             )

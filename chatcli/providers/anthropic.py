@@ -136,13 +136,22 @@ class AnthropicProvider(BaseProvider):
 
         tool_calls = []
         for idx, block in tool_use_blocks.items():
+            raw_input = block.get("input", "")
             try:
                 tool_calls.append({
                     "id": block.get("id", f"toolu_{idx}"),
                     "name": block["name"],
-                    "input": json.loads(block["input"]) if block["input"] else {},
+                    "input": json.loads(raw_input) if raw_input else {},
                 })
             except json.JSONDecodeError:
+                import sys as _sys
+                print(
+                    f"\n[chatcli] Warning: failed to parse JSON arguments "
+                    f"for tool '{block.get('name', '?')}' "
+                    f"(len={len(raw_input)}). "
+                    f"Input will be empty — the tool error may help the model self-correct.\n",
+                    file=_sys.stderr,
+                )
                 tool_calls.append({
                     "id": block.get("id", f"toolu_{idx}"),
                     "name": block["name"],

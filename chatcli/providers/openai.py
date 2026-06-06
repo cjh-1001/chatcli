@@ -107,13 +107,22 @@ class OpenAIProvider(BaseProvider):
 
         tool_calls = []
         for idx, block in tool_call_deltas.items():
+            raw_args = block.get("arguments", "")
             try:
                 tool_calls.append({
                     "id": block["id"] or f"call_{idx}",
                     "name": block["name"],
-                    "input": json.loads(block["arguments"]) if block["arguments"] else {},
+                    "input": json.loads(raw_args) if raw_args else {},
                 })
             except json.JSONDecodeError:
+                import sys as _sys
+                print(
+                    f"\n[chatcli] Warning: failed to parse JSON arguments "
+                    f"for tool '{block.get('name', '?')}' "
+                    f"(len={len(raw_args)}). "
+                    f"Input will be empty — the tool error may help the model self-correct.\n",
+                    file=_sys.stderr,
+                )
                 tool_calls.append({
                     "id": block["id"] or f"call_{idx}",
                     "name": block["name"],
@@ -133,9 +142,18 @@ class OpenAIProvider(BaseProvider):
         tool_calls = []
         if msg.tool_calls:
             for tc in msg.tool_calls:
+                raw_args = getattr(tc.function, "arguments", "") or ""
                 try:
-                    args = json.loads(tc.function.arguments)
+                    args = json.loads(raw_args)
                 except (json.JSONDecodeError, AttributeError):
+                    import sys as _sys
+                    print(
+                        f"\n[chatcli] Warning: failed to parse JSON arguments "
+                        f"for tool '{getattr(tc.function, 'name', '?')}' "
+                        f"(len={len(raw_args)}). "
+                        f"Input will be empty — the tool error may help the model self-correct.\n",
+                        file=_sys.stderr,
+                    )
                     args = {}
                 tool_calls.append({
                     "id": tc.id,
