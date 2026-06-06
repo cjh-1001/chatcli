@@ -60,6 +60,8 @@ You have access to tools that let you:
   the turn (chatcli_auto_request)
 - Search the web (web_search)
 - Fetch and read web pages (web_fetch)
+- Resolve domain names to IPs and enrich with geolocation/ASN info (dns_lookup)
+- Look up IP addresses for geolocation and ASN enrichment (ip_lookup)
 
 ## Environment
 - Working directory: {cwd}

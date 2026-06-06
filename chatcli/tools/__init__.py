@@ -12,6 +12,7 @@ from .list_dir import ListDirTool
 from .web_search import WebSearchTool
 from .web_fetch import WebFetchTool
 from .ip_lookup import IPLookupTool
+from .dns_lookup import DnsLookupTool
 from .json_extract import JsonExtractTool
 from .ioc_quality import IocQualityClassifierTool
 from .detection_lint import DetectionRuleLintTool
@@ -59,6 +60,7 @@ def create_registry(config=None) -> ToolRegistry:
         WebSearchTool(),
         WebFetchTool(),
         IPLookupTool(),
+        DnsLookupTool(),
         JsonExtractTool(),
         IocQualityClassifierTool(),
         DetectionRuleLintTool(),

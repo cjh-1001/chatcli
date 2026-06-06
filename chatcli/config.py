@@ -24,7 +24,7 @@ def _bool_value(value, default: bool = False) -> bool:
 
 DEFAULT_AUTO_TOOLS = [
     "read_file", "glob", "grep", "list_dir", "web_search",
-    "web_fetch", "ip_lookup", "json_extract", "ioc_quality_classifier",
+    "web_fetch", "ip_lookup", "dns_lookup", "json_extract", "ioc_quality_classifier",
     "detection_rule_lint", "git_status", "git_diff", "binary_inspect",
     "binary_find", "binary_hexdump", "encoded_string_extract",
     "obfuscated_data_map", "behavior_capability_map",
