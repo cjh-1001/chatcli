@@ -148,6 +148,15 @@ class GuestAgentClient:
         r.raise_for_status()
         return r.json()
 
+    def list_tools(self) -> dict:
+        """Get configured tool paths and availability."""
+        r = self.client.get(
+            f"{self.base_url}/api/v1/tools",
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     def list_cases(self) -> dict:
         """List all cases."""
         r = self.client.get(

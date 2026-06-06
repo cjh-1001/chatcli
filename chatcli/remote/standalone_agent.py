@@ -57,6 +57,35 @@ if not AGENT_TOKEN:
     print(f"       Set with: $env:{TOKEN_ENV} = 'your-strong-random-token'")
 
 
+# ── Tool path configuration ────────────────────────────────────────
+# Each tool defaults to its command name (assumed on PATH).
+# Override with env var CHATCLI_TOOL_<NAME>, e.g.:
+#   $env:CHATCLI_TOOL_CAPA = "F:\reverseTools\capa.exe"
+#   $env:CHATCLI_TOOL_YARA = "F:\reverseTools\yara64.exe"
+
+def _resolve_tool_paths() -> dict[str, str]:
+    """Read tool paths from environment variables, falling back to command name."""
+    defaults = {
+        "python": sys.executable,
+        "binary_inspect": "binary_inspect",
+        "capa": "capa",
+        "floss": "floss",
+        "yara": "yara",
+        "diec": "diec",
+        "exiftool": "exiftool",
+        "upx": "upx",
+        "ida": "idat",
+        "ghidra": "analyzeHeadless",
+        "tshark": "tshark",
+    }
+    resolved = {}
+    for name, default in defaults.items():
+        env_key = f"CHATCLI_TOOL_{name.upper()}"
+        resolved[name] = os.environ.get(env_key, default)
+    return resolved
+
+TOOL_PATHS = _resolve_tool_paths()
+
 # ── Static analysis tool definitions ──────────────────────────────
 
 STATIC_TOOLS = [
@@ -129,6 +158,18 @@ def _write_state(case_id: str, updates: dict) -> dict:
 
 # ── Endpoints ──────────────────────────────────────────────────────
 
+@app.get("/api/v1/tools")
+async def tools_list(authorization: str | None = Header(None)):
+    """Return configured tool paths and availability (which tools exist on disk)."""
+    _auth(authorization)
+    tools = {}
+    for name, path in sorted(TOOL_PATHS.items()):
+        exe = Path(path)
+        available = exe.is_file() if exe.is_absolute() else shutil.which(path) is not None
+        tools[name] = {"path": path, "available": available}
+    return {"tools": tools}
+
+
 @app.get("/api/v1/health")
 async def health():
     return {
@@ -137,6 +178,7 @@ async def health():
         "python": sys.version,
         "cases_dir": str(CASES_DIR),
         "outbox_dir": str(OUTBOX_DIR),
+        "tool_count": len(TOOL_PATHS),
     }
 
 
@@ -300,10 +342,12 @@ async def exec_cmd(body: dict, authorization: str | None = Header(None)):
 async def _startup():
     for d in [CASES_DIR, OUTBOX_DIR]:
         d.mkdir(parents=True, exist_ok=True)
-    print(f"chatcli Remote Agent v1.0.0")
+    available = sum(1 for t in TOOL_PATHS.values() if Path(t).is_file() or shutil.which(t))
+    print(f"chatcli Remote Agent v1.1.0")
     print(f"  Listening: {AGENT_HOST}:{AGENT_PORT}")
     print(f"  Cases:     {CASES_DIR}")
     print(f"  Outbox:    {OUTBOX_DIR}")
+    print(f"  Tools:     {available}/{len(TOOL_PATHS)} configured")
     print(f"  Auth:      {'configured' if AGENT_TOKEN else 'MISSING — set ' + TOKEN_ENV}")
 
 

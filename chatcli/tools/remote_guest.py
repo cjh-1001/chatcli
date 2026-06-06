@@ -14,6 +14,7 @@ class RemoteGuestTool(Tool):
         "Interact with the remote analysis Guest Agent on Tencent Cloud. "
         "This is the main channel for remote operations. Actions:\n"
         "  health    — Check if Guest Agent is running\n"
+        "  tools     — List configured analysis tools and their paths\n"
         "  exec      — Execute an analysis command directly on the remote server\n"
         "  prepare   — Create a new analysis case\n"
         "  upload    — Upload sample file to a case\n"
@@ -40,7 +41,7 @@ class RemoteGuestTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["health", "exec", "prepare", "upload", "run", "status", "download", "list"],
+                "enum": ["health", "tools", "exec", "prepare", "upload", "run", "status", "download", "list"],
                 "description": "Action to perform.",
             },
             "case_id": {
@@ -115,6 +116,15 @@ class RemoteGuestTool(Tool):
                     ),
                     metadata=data,
                 )
+
+            elif action == "tools":
+                data = client.list_tools()
+                tools = data.get("tools", {})
+                lines = ["Remote analysis tools:"]
+                for name, info in sorted(tools.items()):
+                    status = "✅" if info.get("available") else "❌"
+                    lines.append(f"  {status} {name}: {info.get('path', '?')}")
+                return ToolResult(content="\n".join(lines), metadata=data)
 
             elif action == "exec":
                 command = kwargs.get("command", "") or file_path
