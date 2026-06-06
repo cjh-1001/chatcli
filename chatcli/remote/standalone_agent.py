@@ -67,16 +67,14 @@ def _resolve_tool_paths() -> dict[str, str]:
     """Read tool paths from environment variables, falling back to command name."""
     defaults = {
         "python": sys.executable,
+        "ida": r"C:\Program Files\IDA Professional 9.0\idat.exe",
+        "capa": r"C:\Program Files\reverseTools\capa.exe",
+        "floss": r"C:\Program Files\reverseTools\floss.exe",
+        "yara": r"C:\Program Files\reverseTools\yara64.exe",
+        "diec": r"C:\Program Files\reverseTools\diec.exe",
+        "exiftool": r"C:\Program Files\reverseTools\exiftool.exe",
+        "upx": r"C:\Program Files\reverseTools\upx.exe",
         "binary_inspect": "binary_inspect",
-        "capa": "capa",
-        "floss": "floss",
-        "yara": "yara",
-        "diec": "diec",
-        "exiftool": "exiftool",
-        "upx": "upx",
-        "ida": "idat",
-        "ghidra": "analyzeHeadless",
-        "tshark": "tshark",
     }
     resolved = {}
     for name, default in defaults.items():
