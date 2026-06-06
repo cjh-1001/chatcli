@@ -39,6 +39,8 @@ DEFAULT_ASK_TOOLS = [
     "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks", "external_static_analyze",
     "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
     "malware_share_package", "chatcli_auto_request",
+    "remote_exec", "remote_submit", "remote_fetch", "remote_vm_control",
+    "remote_watch", "remote_consume", "remote_guest",
 ]
 BUILTIN_AUTO_TOOLS = (
     "ip_lookup", "json_extract", "ioc_quality_classifier", "detection_rule_lint",
@@ -54,6 +56,8 @@ BUILTIN_ASK_TOOLS = (
     "ida_mcp_ensure", "ida_mcp_probe", "ida_mcp_list_tools", "ida_mcp_call", "runtime_string_hooks",
     "external_static_analyze", "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
     "malware_share_package", "chatcli_auto_request",
+    "remote_exec", "remote_submit", "remote_fetch", "remote_vm_control",
+    "remote_watch", "remote_consume", "remote_guest",
 )
 CONFIG_FILENAMES = ("config.yaml", "config.yml")
 
@@ -94,9 +98,37 @@ class PermissionConfig:
 
 
 @dataclass
+class RemoteConfig:
+    """Configuration for remote analysis server (Tencent Cloud + HTTP)."""
+    enabled: bool = False
+    # HTTP connection (primary channel)
+    base_url: str = ""                   # Guest Agent URL, e.g. http://10.0.0.5:8443
+    # SSH connection (fallback/legacy)
+    host: str = ""                       # Tencent Cloud public IP or hostname
+    port: int = 22
+    user: str = "Administrator"
+    key_file: str = ""                   # SSH private key path
+    password: str = ""                   # Fallback (prefer key_file)
+    # Remote directories
+    remote_analysis_dir: str = "C:\\analysis"
+    remote_tools_dir: str = "C:\\tools"
+    remote_python: str = "python"
+    # Tencent Cloud API (for VM lifecycle management)
+    tencent_secret_id: str = ""          # Env: TENCENTCLOUD_SECRET_ID
+    tencent_secret_key: str = ""         # Env: TENCENTCLOUD_SECRET_KEY
+    tencent_region: str = "ap-guangzhou" # Env: TENCENTCLOUD_REGION
+    tencent_instance_id: str = ""        # Env: TENCENTCLOUD_INSTANCE_ID
+    tencent_snapshot_id: str = ""        # Baseline snapshot for restore
+    # Guest Agent (Step 2)
+    guest_agent_port: int = 8443
+    guest_agent_token: str = ""          # Env: CHATCLI_GUEST_AGENT_TOKEN
+
+
+@dataclass
 class Config:
     provider: ProviderConfig = field(default_factory=ProviderConfig)
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
+    remote: RemoteConfig = field(default_factory=RemoteConfig)
     max_tool_rounds: int = 80
     min_tool_rounds: int = 5        # minimum tools before model can produce a final answer (prevents shallow analysis)
     self_correction: bool = True
@@ -295,6 +327,28 @@ class Config:
             except ValueError:
                 pass
 
+        # ── Remote config env var overrides ─────────────────────
+        if os.environ.get("CHATCLI_REMOTE_URL"):
+            cfg.remote.base_url = os.environ["CHATCLI_REMOTE_URL"]
+            cfg.remote.enabled = True
+        if os.environ.get("CHATCLI_REMOTE_HOST"):
+            cfg.remote.host = os.environ["CHATCLI_REMOTE_HOST"]
+            cfg.remote.enabled = True
+        if os.environ.get("CHATCLI_REMOTE_KEY"):
+            cfg.remote.key_file = os.environ["CHATCLI_REMOTE_KEY"]
+        if os.environ.get("CHATCLI_REMOTE_USER"):
+            cfg.remote.user = os.environ["CHATCLI_REMOTE_USER"]
+        if os.environ.get("TENCENTCLOUD_SECRET_ID"):
+            cfg.remote.tencent_secret_id = os.environ["TENCENTCLOUD_SECRET_ID"]
+        if os.environ.get("TENCENTCLOUD_SECRET_KEY"):
+            cfg.remote.tencent_secret_key = os.environ["TENCENTCLOUD_SECRET_KEY"]
+        if os.environ.get("TENCENTCLOUD_REGION"):
+            cfg.remote.tencent_region = os.environ["TENCENTCLOUD_REGION"]
+        if os.environ.get("TENCENTCLOUD_INSTANCE_ID"):
+            cfg.remote.tencent_instance_id = os.environ["TENCENTCLOUD_INSTANCE_ID"]
+        if os.environ.get("CHATCLI_GUEST_AGENT_TOKEN"):
+            cfg.remote.guest_agent_token = os.environ["CHATCLI_GUEST_AGENT_TOKEN"]
+
         if not cfg.workspace:
             cfg.workspace = os.getcwd()
 
@@ -390,3 +444,16 @@ class Config:
                     cfg.ida_mcp_tool_limit = int(reverse["ida_mcp_tool_limit"])
                 except (TypeError, ValueError):
                     pass
+
+        # ── Remote server config ────────────────────────────────
+        remote = data.get("remote")
+        if isinstance(remote, dict):
+            for key in (
+                "enabled", "base_url", "host", "port", "user", "key_file", "password",
+                "remote_analysis_dir", "remote_tools_dir", "remote_python",
+                "tencent_secret_id", "tencent_secret_key", "tencent_region",
+                "tencent_instance_id", "tencent_snapshot_id",
+                "guest_agent_port", "guest_agent_token",
+            ):
+                if key in remote:
+                    setattr(cfg.remote, key, remote[key])

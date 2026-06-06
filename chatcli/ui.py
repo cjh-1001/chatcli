@@ -133,6 +133,8 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         if c=="/skills": return self._handle_skills(a)
         if c=="/tools": return self._handle_tools(a)
         if c=="/child": return self._handle_child(a)
+        if c=="/observe": return self._handle_observe(a)
+        if c=="/dashboard": return self._handle_dashboard()
         if c in ("/auto-requests", "/autorequests"): return self._handle_auto_requests(a)
         if c=="/plan":
             self.agent.plan(a or "Help me plan a task")
@@ -535,4 +537,25 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
                 )
             return True
         self.console.print(f"[dim]Memory dir: {_memory_dir(self.config.workspace)}[/]")
+        return True
+
+    def _handle_dashboard(self):
+        """Show the analysis monitoring dashboard via /dashboard command."""
+        remote = self.config.remote if hasattr(self.config, "remote") else None
+        if not remote or not remote.enabled:
+            self.console.print("[yellow]Remote server not configured.[/]")
+            return True
+
+        from .ui_dashboard import Dashboard, build_dashboard_callbacks
+
+        remote_fn, child_fn = build_dashboard_callbacks(
+            remote_base_url=remote.base_url,
+            remote_token=remote.guest_agent_token,
+            children_dict=getattr(self, "children", {}),
+        )
+
+        self.console.print("[cyan]Starting dashboard... Press Ctrl+C to exit.[/]")
+        dash = Dashboard(remote_fn, child_fn, refresh_seconds=3.0)
+        dash.run()
+        self.console.print("[dim]Dashboard closed.[/]")
         return True

@@ -1,4 +1,4 @@
-"""Child-window and auto-request support for the REPL."""
+"""Child-window, observer-child, and auto-request support for the REPL."""
 
 import copy
 from datetime import datetime
@@ -24,6 +24,7 @@ from .child_state import (
     MAX_CONCURRENT_CHILDREN,
     MAX_TOTAL_CHILDREN,
 )
+from .orchestrate import get_role_allowed_tools, get_role_prompt, get_observer_roles
 from .worklog import get_task_status
 
 
@@ -444,6 +445,132 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
                 thread.join()
         self._process_auto_requests()
         return self._child_list()
+    # ── Observer child methods ───────────────────────────────────
+
+    def _make_observer_child(self, role_name: str, result_dir: str) -> ChildWindow | None:
+        """Create a child agent with role-restricted tool set for analyzing results.
+
+        The child gets only the tools allowed for its role, plus read_file for
+        reading other children's records.
+        """
+        from .orchestrate import ANALYSIS_ROLES
+
+        role = ANALYSIS_ROLES.get(role_name)
+        if not role:
+            self.console.print(f"[yellow]Unknown role:[/] [dim]{role_name}[/]")
+            return None
+
+        child_name = self._unique_child_name(role_name)
+        child = self._make_child(child_name)
+
+        # Filter tool registry to role-allowed tools
+        allowed = role.get("allowed_tools", [])
+        child.agent.tools = self._filter_tools_for_role(allowed)
+
+        # Store role info for the prompt
+        child._observer_role = role_name
+        child._observer_result_dir = result_dir
+
+        self.console.print(
+            f"[green]observer created[/] [cyan]{child.name}[/] "
+            f"[dim]({role_name}, {len(allowed)} tools)[/]"
+        )
+        return child
+
+    def _filter_tools_for_role(self, allowed: list[str]):
+        """Create a restricted ToolRegistry with only the specified tools."""
+        from .tools.base import ToolRegistry
+
+        filtered = ToolRegistry()
+        main_tools = self.agent.tools
+        for name in allowed:
+            tool = main_tools.get(name)
+            if tool is not None:
+                filtered.register(tool)
+
+        # Always include read_file for reading child records
+        if "read_file" not in allowed:
+            read_tool = main_tools.get("read_file")
+            if read_tool is not None:
+                filtered.register(read_tool)
+
+        return filtered
+
+    def _observer_prompt(self, child: ChildWindow, task: str) -> str:
+        """Build the prompt for an observer child agent."""
+        role_name = getattr(child, "_observer_role", "observer")
+        result_dir = getattr(child, "_observer_result_dir", "")
+        role_prompt = get_role_prompt(role_name)
+        notes_path = Path(self.config.workspace) / ".chatcli" / "children" / f"{child.name}.md"
+
+        role_section = role_prompt if role_prompt else f"You are the {role_name}."
+        dir_section = (
+            f"\n\nResult directory to analyze: {result_dir}\n"
+            f"Read all relevant files from this directory using the read_file tool."
+        ) if result_dir else ""
+
+        return (
+            f"[Observer: {child.name} — {role_name}]\n"
+            f"You are an independent parallel analysis session. The main window "
+            f"will continue its own work without waiting for you.\n\n"
+            f"{role_section}"
+            f"{dir_section}\n\n"
+            f"Task: {task}\n\n"
+            "Rules:\n"
+            f"- Write a thorough, self-contained result. The main window and correlator "
+            f"  will only see your final output, not your conversation history.\n"
+            f"- Persist key findings, evidence, and conclusions to `{notes_path}`.\n"
+            "- Do not modify `.chatcli/task.md` or `.chatcli/worklog.md`.\n"
+            "- Be precise about evidence: cite exact file paths, line numbers, "
+            "  hash values, API names, offsets.\n"
+            "- Use confidence labels (high/medium/low) for every claim.\n"
+            "- End with a clear summary block that the correlator can consume.\n"
+        )
+
+    def _spawn_observers(self, result_dir: str, roles: list[str] | None = None) -> list[str]:
+        """Spawn observer children for all or specified roles.
+
+        Returns list of child names created.
+        """
+        role_names = roles if roles else get_observer_roles()
+        created = []
+        task_description = (
+            f"Analyze the results in {result_dir}. Read result files, extract "
+            f"evidence, form conclusions. Write findings to your child record."
+        )
+
+        for role_name in role_names:
+            child = self._make_observer_child(role_name, result_dir)
+            if child is None:
+                continue
+
+            task = f"[{role_name}] {task_description}"
+            self._run_child_task(child, self._observer_prompt(child, task))
+            created.append(child.name)
+
+        return created
+
+    # ── Command handling ─────────────────────────────────────────
+
+    def _handle_observe(self, a):
+        """Handle /observe command — spawn analysis observers for remote results."""
+        args = shlex.split(a or "", posix=False) if a else []
+        if not args:
+            self.console.print(
+                "[yellow]Usage:[/] /observe <result_dir> [roles...]\n"
+                "[dim]Roles: static_observer, dynamic_observer, network_observer, correlator[/]"
+            )
+            return True
+
+        result_dir = args[0]
+        roles = args[1:] if len(args) > 1 else None
+        created = self._spawn_observers(result_dir, roles)
+        self.console.print(
+            f"[green]{len(created)} observers spawned[/] "
+            f"[dim]for {result_dir}[/]"
+        )
+        return True
+
     def _handle_child(self, a):
         try:
             parts = shlex.split(a or "", posix=False)

@@ -44,6 +44,14 @@ from .attack_technique_plan import AttackTechniquePlannerTool
 from .malware_share import MalwareSharePackageTool
 from .internal import ChatcliAutoRequestTool
 from .tool_health import ToolHealthCheckTool
+from .remote_exec import RemoteExecTool
+from .remote_submit import RemoteSubmitTool
+from .remote_fetch import RemoteFetchTool
+from .remote_vm import RemoteVMControlTool
+from .remote_watch import RemoteWatchTool
+from .remote_consume import RemoteConsumeTool
+from .remote_guest import RemoteGuestTool
+from .orchestrate_results import OrchestrateResultsTool
 
 
 def create_registry(config=None) -> ToolRegistry:
@@ -104,6 +112,17 @@ def create_registry(config=None) -> ToolRegistry:
         ToolHealthCheckTool(config),
         ChatcliAutoRequestTool(),
     ]
+    # Conditionally register remote tools when remote server is configured
+    remote = getattr(config, "remote", None) if config else None
+    if remote is not None and remote.enabled:
+        tools.append(RemoteExecTool(config))
+        tools.append(RemoteSubmitTool(config))
+        tools.append(RemoteFetchTool(config))
+        tools.append(RemoteVMControlTool(config))
+        tools.append(RemoteWatchTool(config))
+        tools.append(RemoteConsumeTool(config))
+        tools.append(RemoteGuestTool(config))
+        tools.append(OrchestrateResultsTool(config))
     for tool in tools:
         registry.register(tool)
     return registry
@@ -130,5 +149,8 @@ __all__ = [
     "MalwareSharePackageTool",
     "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",
+    "RemoteExecTool", "RemoteSubmitTool", "RemoteFetchTool", "RemoteVMControlTool",
+    "RemoteWatchTool", "RemoteConsumeTool", "RemoteGuestTool",
+    "OrchestrateResultsTool",
     "create_registry",
 ]
