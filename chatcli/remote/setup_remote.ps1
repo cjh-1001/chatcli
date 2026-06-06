@@ -1,91 +1,55 @@
-# chatcli 腾讯云分析服务器 — 一键部署脚本
-# 在腾讯云 Windows 服务器上以管理员身份运行
-# 用法: powershell -ExecutionPolicy Bypass -File setup_remote.ps1
+# chatcli Tencent Cloud analysis server bootstrap
+# Run on the Tencent Cloud Windows server as Administrator.
+# This script prepares the environment for C:\chatcli-server\chatcli_guest_agent.py.
 
 $ErrorActionPreference = "Stop"
-Write-Host "=== chatcli 远程分析服务器部署 ===" -ForegroundColor Cyan
 
-# ── 1. 检查 Python ──────────────────────────────────────────
-Write-Host "[1/5] 检查 Python..." -ForegroundColor Yellow
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) {
-    Write-Host "Python 未安装。请先从 https://python.org 下载 Python 3.10+" -ForegroundColor Red
-    Write-Host "安装时勾选 'Add Python to PATH'" -ForegroundColor Red
+Write-Host "=== chatcli Guest Agent bootstrap ===" -ForegroundColor Cyan
+
+if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+    Write-Host "Python launcher 'py' was not found. Install Python 3.10+ and enable PATH." -ForegroundColor Red
     exit 1
 }
-Write-Host "  Python: $(python --version)" -ForegroundColor Green
 
-# ── 2. 安装 chatcli ─────────────────────────────────────────
-Write-Host "[2/5] 安装 chatcli + 依赖..." -ForegroundColor Yellow
-pip install --upgrade pip
-pip install "fastapi>=0.115.0" "uvicorn[standard]>=0.30.0" "python-multipart>=0.0.9"
-pip install git+https://github.com/cjh-1001/chatcli.git
+Write-Host "[1/4] Installing Python dependencies..." -ForegroundColor Yellow
+py -3 -m pip install --upgrade pip
+py -3 -m pip install "fastapi>=0.115.0" "uvicorn[standard]>=0.30.0" "python-multipart>=0.0.9"
 
-Write-Host "  chatcli + Guest Agent 依赖已安装" -ForegroundColor Green
-
-# ── 3. 创建目录结构 ─────────────────────────────────────────
-Write-Host "[3/5] 创建分析工作目录..." -ForegroundColor Yellow
+Write-Host "[2/4] Creating server directories..." -ForegroundColor Yellow
 $dirs = @(
+    "C:\chatcli-server",
     "C:\analysis",
-    "C:\analysis\inbox",
-    "C:\analysis\outbox",
     "C:\analysis\cases",
-    "C:\analysis\tmp",
-    "C:\tools"
+    "C:\analysis\outbox",
+    "C:\analysis\rules",
+    "C:\analysis\tmp"
 )
-foreach ($d in $dirs) {
-    if (-not (Test-Path $d)) {
-        New-Item -ItemType Directory -Path $d -Force | Out-Null
-    }
+foreach ($dir in $dirs) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
-Write-Host "  目录结构已创建: C:\analysis\" -ForegroundColor Green
 
-# ── 4. 设置 Guest Agent Token ───────────────────────────────
-Write-Host "[4/5] 配置 Guest Agent Token..." -ForegroundColor Yellow
-
-$existingToken = [Environment]::GetEnvironmentVariable("CHATCLI_GUEST_AGENT_TOKEN", "Machine")
-if (-not $existingToken) {
-    # 生成随机 token
-    $token = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ })
+Write-Host "[3/4] Configuring Guest Agent token..." -ForegroundColor Yellow
+$token = [Environment]::GetEnvironmentVariable("CHATCLI_GUEST_AGENT_TOKEN", "Machine")
+if (-not $token) {
+    $chars = (48..57) + (65..90) + (97..122)
+    $token = -join ($chars | Get-Random -Count 48 | ForEach-Object { [char]$_ })
     [Environment]::SetEnvironmentVariable("CHATCLI_GUEST_AGENT_TOKEN", $token, "Machine")
-    Write-Host "  已生成并保存 Token: $token" -ForegroundColor Green
-    Write-Host "  *** 请复制此 Token！chatcli 侧配置需要用到 ***" -ForegroundColor Magenta
-} else {
-    Write-Host "  Token 已存在" -ForegroundColor Green
+}
+$env:CHATCLI_GUEST_AGENT_TOKEN = $token
+
+Write-Host "[4/4] Opening local firewall port 8443..." -ForegroundColor Yellow
+if (-not (Get-NetFirewallRule -DisplayName "chatcli Guest Agent" -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -DisplayName "chatcli Guest Agent" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow | Out-Null
 }
 
-# ── 5. 防火墙放行 ───────────────────────────────────────────
-Write-Host "[5/5] 配置防火墙..." -ForegroundColor Yellow
-$rule = Get-NetFirewallRule -DisplayName "chatcli Guest Agent" -ErrorAction SilentlyContinue
-if (-not $rule) {
-    New-NetFirewallRule `
-        -DisplayName "chatcli Guest Agent" `
-        -Direction Inbound `
-        -Protocol TCP `
-        -LocalPort 8443 `
-        -Action Allow | Out-Null
-    Write-Host "  防火墙规则已添加: TCP 8443" -ForegroundColor Green
-} else {
-    Write-Host "  防火墙规则已存在" -ForegroundColor Green
-}
-
-# ── 完成 ────────────────────────────────────────────────────
+$agent = "C:\chatcli-server\chatcli_guest_agent.py"
 Write-Host ""
-Write-Host "=== 部署完成 ===" -ForegroundColor Cyan
+Write-Host "Bootstrap complete." -ForegroundColor Green
+Write-Host "Copy server\chatcli_guest_agent.py from the client machine to:" -ForegroundColor White
+Write-Host "  $agent" -ForegroundColor Gray
 Write-Host ""
-Write-Host "启动 Guest Agent:" -ForegroundColor White
-Write-Host "  python -m chatcli.remote.guest_agent.main --host 0.0.0.0 --port 8443" -ForegroundColor Gray
+Write-Host "Start command:" -ForegroundColor White
+Write-Host "  py -3 $agent --host 0.0.0.0 --port 8443" -ForegroundColor Gray
 Write-Host ""
-Write-Host "如需开机自启，用 Task Scheduler 创建一个任务:" -ForegroundColor White
-Write-Host "  - Trigger: At system startup" -ForegroundColor Gray
-Write-Host "  - Action: python -m chatcli.remote.guest_agent.main --host 0.0.0.0 --port 8443" -ForegroundColor Gray
-Write-Host ""
-Write-Host "chatcli 侧配置 (config.yaml):" -ForegroundColor White
-Write-Host "  remote:" -ForegroundColor Gray
-Write-Host "    enabled: true" -ForegroundColor Gray
-Write-Host "    base_url: http://<腾讯云IP>:8443" -ForegroundColor Gray
-Write-Host "    guest_agent_token: <上面生成的 Token>" -ForegroundColor Gray
-Write-Host ""
-Write-Host "或设置环境变量:" -ForegroundColor White
-Write-Host '  $env:CHATCLI_REMOTE_URL = "http://<腾讯云IP>:8443"' -ForegroundColor Gray
-Write-Host '  $env:CHATCLI_GUEST_AGENT_TOKEN = "<Token>"' -ForegroundColor Gray
+Write-Host "Token for chatcli client config:" -ForegroundColor White
+Write-Host "  $token" -ForegroundColor Yellow

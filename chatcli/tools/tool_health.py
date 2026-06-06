@@ -11,6 +11,11 @@ from pathlib import Path
 from .base import Tool, ToolResult, coerce_bool, coerce_str_list
 from ._ida_utils import _find_ida
 from .ghidra import _find_ghidra
+from ._static_tool_config import (
+    PYTHON_TOOL_FALLBACKS,
+    TOOL_CONFIG_ATTRS,
+    YARA_PYTHON_PACKAGE,
+)
 
 
 BUILT_IN_TOOLS = {
@@ -84,12 +89,14 @@ EXECUTABLE_PROBES = {
 
 PYTHON_PACKAGE_PROBES = {
     "angr": "angr",
+    PYTHON_TOOL_FALLBACKS["capa"]["package"]: PYTHON_TOOL_FALLBACKS["capa"]["module"],
+    PYTHON_TOOL_FALLBACKS["floss"]["package"]: PYTHON_TOOL_FALLBACKS["floss"]["module"],
     "frida-python": "frida",
     "pefile": "pefile",
     "lief": "lief",
     "capstone": "capstone",
     "unicorn": "unicorn",
-    "yara-python": "yara",
+    YARA_PYTHON_PACKAGE["package"]: YARA_PYTHON_PACKAGE["module"],
 }
 
 TOOL_DEPENDENCIES = {
@@ -107,8 +114,8 @@ TOOL_DEPENDENCIES = {
 }
 
 INSTALL_HINTS = {
-    "capa": "Install flare-capa or use the reverse extra when available.",
-    "floss": "Install flare-floss for decoded string extraction.",
+    "capa": "Install flare-capa. If the capa executable is not on PATH, chatcli can still detect the Python module.",
+    "floss": "Install flare-floss. If the floss executable is not on PATH, chatcli can still detect the Python module.",
     "die": "Install Detect It Easy CLI and configure die_path if it is not on PATH.",
     "exiftool": "Install ExifTool and configure exiftool_path if needed.",
     "yara": "Install YARA CLI for rule scanning.",
@@ -181,26 +188,18 @@ def _probe_external(name: str, include_versions: bool, config=None) -> dict[str,
         path = _find_ghidra(getattr(config, "ghidra_path", "") if config else "")
     elif name == "angr":
         return _probe_python_package("angr", "angr", include_versions)
-    elif name == "die":
-        configured = getattr(config, "die_path", "") if config else ""
+    elif name in TOOL_CONFIG_ATTRS:
+        configured = getattr(config, TOOL_CONFIG_ATTRS[name], "") if config else ""
         path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
-    elif name == "exiftool":
-        configured = getattr(config, "exiftool_path", "") if config else ""
-        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
-    elif name == "upx":
-        configured = getattr(config, "upx_path", "") if config else ""
-        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
-    elif name == "yara":
-        configured = getattr(config, "yara_path", "") if config else ""
-        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
-    elif name == "capa":
-        configured = getattr(config, "capa_path", "") if config else ""
-        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
-    elif name == "floss":
-        configured = getattr(config, "floss_path", "") if config else ""
-        path = configured if configured and Path(configured).exists() else _which_any(EXECUTABLE_PROBES.get(name, [name]))
+        fallback = PYTHON_TOOL_FALLBACKS.get(name)
+        if not path and fallback:
+            row = _probe_python_package(str(fallback["package"]), str(fallback["module"]), include_versions)
+            row["name"] = name
+            row["kind"] = "python-tool"
+            row["path"] = fallback["path"]
+            return row
     elif name == "yara-python":
-        return _probe_python_package("yara-python", "yara", include_versions)
+        return _probe_python_package(str(YARA_PYTHON_PACKAGE["package"]), str(YARA_PYTHON_PACKAGE["module"]), include_versions)
     else:
         path = _which_any(EXECUTABLE_PROBES.get(name, [name]))
     row: dict[str, object] = {

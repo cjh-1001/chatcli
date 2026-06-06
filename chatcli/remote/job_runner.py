@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -69,7 +71,7 @@ STATIC_TOOLS = [
         "output": "strings.txt",
         "args": lambda target: [
             "python", "-c",
-            "import sys; data=open(sys.argv[1],'rb').read(); "
+            "import re, sys; data=open(sys.argv[1],'rb').read(); "
             "strings=[b.decode('ascii','replace') for b in "
             "re.findall(rb'[\\x20-\\x7e]{4,}', data)]; "
             "print('\\n'.join(strings[:2000]))",
@@ -307,6 +309,92 @@ def run_network_analysis(state: JobState, mode: str = "real") -> None:
     )
 
 
+def _run_verify_probe(command: str, timeout: int = 10) -> dict[str, Any]:
+    started = time.time()
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(1, min(timeout, 30)),
+        )
+        return {
+            "command": command,
+            "exit_code": result.returncode,
+            "stdout": (result.stdout or "")[:12000],
+            "stderr": (result.stderr or "")[:4000],
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "command": command,
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    except Exception as exc:
+        return {
+            "command": command,
+            "exit_code": -2,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+
+
+def run_server_verification(state: JobState, mode: str = "real") -> None:
+    """Collect post-analysis server indicators for compromise review."""
+    verify_dir = state.outbox_dir / "verify"
+    verify_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot: dict[str, Any] = {
+        "job_id": state.job_id,
+        "sample_sha256": state.sample_sha256,
+        "sample_path": str(state.sample_path),
+        "timestamp": time.time(),
+        "hostname": platform.node(),
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "mode": mode,
+        "status": "dry_run" if mode == "dry_run" else "collected",
+        "probes": {},
+    }
+
+    if mode == "dry_run":
+        state.steps_completed.append("verify.server_status (dry_run)")
+    else:
+        probes = {
+            "network_connections": "netstat -ano" if os.name == "nt" else "ss -tunap",
+            "processes": "tasklist" if os.name == "nt" else "ps aux",
+        }
+        if os.name == "nt":
+            probes.update({
+                "services": "sc query state= all",
+                "scheduled_tasks": "schtasks /query /fo LIST",
+                "recent_system_events": "wevtutil qe System /c:30 /f:text",
+            })
+        else:
+            probes.update({
+                "services": "systemctl --no-pager --type=service --state=running",
+                "cron": "crontab -l",
+                "recent_logs": "journalctl -n 50 --no-pager",
+            })
+        snapshot["probes"] = {
+            name: _run_verify_probe(command)
+            for name, command in probes.items()
+        }
+        state.steps_completed.append("verify.server_status")
+
+    (verify_dir / "server_status_after.json").write_text(
+        json.dumps(snapshot, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 # ── Main entry ───────────────────────────────────────────────────
 
 
@@ -337,12 +425,23 @@ def run_job(
     plan = job.get("analysis_plan", {"static": True})
     vm_config = job.get("dynamic_config", {})
 
-    # Find sample
-    sample_dir = job_dir / "sample"
-    samples = list(sample_dir.glob("*")) if sample_dir.is_dir() else []
-    if not samples:
-        raise FileNotFoundError(f"No sample found in {sample_dir}")
-    sample_path = samples[0]  # Take the first file
+    # Find sample. Newer Guest Agent jobs may point at a file that already
+    # exists on the remote server; uploaded samples still use sample/.
+    configured_sample = str(job.get("sample_path", "") or "").strip()
+    if configured_sample:
+        candidate = Path(configured_sample).expanduser()
+        sample_path = candidate if candidate.is_absolute() else job_dir / candidate
+        if not sample_path.is_file():
+            raise FileNotFoundError(f"Configured sample_path not found: {sample_path}")
+    else:
+        sample_dir = job_dir / "sample"
+        samples = list(sample_dir.glob("*")) if sample_dir.is_dir() else []
+        if not samples:
+            raise FileNotFoundError(
+                f"No sample found in {sample_dir}; provide sample_path in job.json "
+                "or upload a sample before running."
+            )
+        sample_path = samples[0]  # Take the first file
 
     # Compute hash
     sha256 = hashlib.sha256()
@@ -385,6 +484,11 @@ def run_job(
         # ── Network capture ──────────────────────────────────
         if plan.get("network", False):
             run_network_analysis(state, mode)
+            state.write_status()
+
+        # ── Server compromise/attack-state verification ─────────
+        if plan.get("verify", False):
+            run_server_verification(state, mode)
             state.write_status()
 
         state.mark_done()

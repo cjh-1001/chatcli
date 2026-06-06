@@ -103,6 +103,9 @@ ghidra_path: ""              # Example: 'D:/Tools/ghidra_11.1.2_PUBLIC'
 die_path: ""                 # Example: 'D:/Tools/DetectItEasy/stuff/diec.exe'
 exiftool_path: ""            # Example: 'D:/Tools/exiftool.exe'
 upx_path: ""                 # Example: 'D:/Tools/upx.exe'
+capa_path: ""                # Optional CLI path; flare-capa Python package is also detected
+floss_path: ""               # Optional CLI path; flare-floss Python package is also detected
+yara_path: ""                # Optional YARA CLI path; yara-python is also detected
 
 ida_mcp_url: ""              # Example: http://127.0.0.1:13337/mcp
 ida_mcp_start_command: ""

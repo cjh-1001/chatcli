@@ -7,6 +7,7 @@ from typing import Any
 
 from ._json_utils import load_json
 from ._text_utils import short_text
+from ._analysis_collectors import collect_analysis_items
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .behavior_confidence import downgrade_confidence, rank_confidence
 
@@ -160,32 +161,23 @@ IMPACT_HINTS = {
 
 
 def _find_capabilities(value: Any, out: list[dict[str, Any]]) -> None:
-    if isinstance(value, dict):
-        caps = value.get("capabilities")
-        if isinstance(caps, list):
-            for item in caps:
-                if isinstance(item, dict) and (item.get("category") or item.get("label")):
-                    out.append(item)
-        hints = value.get("report_hints")
-        if isinstance(hints, dict):
-            candidates = hints.get("key_capability_candidates")
-            if isinstance(candidates, list):
-                for item in candidates:
-                    if isinstance(item, dict):
-                        out.append({
-                            "category": "unknown",
-                            "label": item.get("category", "能力候选"),
-                            "matched_terms": [item.get("technique", "")],
-                            "evidence": [item.get("evidence", "")],
-                            "confidence": item.get("confidence", "low"),
-                            "claim_level": "static capability",
-                            "required_validation": ["Validate the supporting code path before using this in conclusions."],
-                        })
-        for child in value.values():
-            _find_capabilities(child, out)
-    elif isinstance(value, list):
-        for child in value:
-            _find_capabilities(child, out)
+    collect_analysis_items(
+        value,
+        capabilities=out,
+        include_attack_chain=False,
+        include_steps=False,
+        include_audits=False,
+        include_report_attack_chain=False,
+        include_report_candidates=True,
+        report_candidate_category_default="unknown",
+        report_candidate_label_default="能力候选",
+        report_candidate_force_category_default=True,
+        report_candidate_claim_level="static capability",
+        report_candidate_required_validation=[
+            "Validate the supporting code path before using this in conclusions."
+        ],
+        require_capability_identity=True,
+    )
 
 
 def _normalize_capability(item: dict[str, Any]) -> dict[str, Any]:

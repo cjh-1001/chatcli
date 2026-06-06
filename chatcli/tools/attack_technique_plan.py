@@ -7,43 +7,24 @@ from typing import Any
 
 from ._json_utils import load_json
 from ._text_utils import short_text
+from ._analysis_collectors import as_list, collect_analysis_items
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .behavior_confidence import rank_confidence
 from .behavior_hierarchy import BEHAVIOR_FAMILIES, annotate_hierarchy
 
 
 def _collect_capabilities(value: Any, out: list[dict[str, Any]]) -> None:
-    if isinstance(value, dict):
-        capabilities = value.get("capabilities")
-        if isinstance(capabilities, list):
-            out.extend(item for item in capabilities if isinstance(item, dict))
-        hints = value.get("report_hints")
-        if isinstance(hints, dict):
-            candidates = hints.get("key_capability_candidates")
-            if isinstance(candidates, list):
-                for item in candidates:
-                    if isinstance(item, dict):
-                        out.append({
-                            "category": item.get("category", "unknown"),
-                            "label": item.get("category", "能力候选"),
-                            "matched_terms": [item.get("technique", "")],
-                            "evidence": [item.get("evidence", "")],
-                            "confidence": item.get("confidence", "low"),
-                            "required_validation": [],
-                        })
-        for child in value.values():
-            _collect_capabilities(child, out)
-    elif isinstance(value, list):
-        for child in value:
-            _collect_capabilities(child, out)
-
-
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
+    collect_analysis_items(
+        value,
+        capabilities=out,
+        include_attack_chain=False,
+        include_steps=False,
+        include_audits=False,
+        include_report_attack_chain=False,
+        include_report_candidates=True,
+        report_candidate_category_default="unknown",
+        report_candidate_label_default="能力候选",
+    )
 
 
 def _normalize(capabilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -52,16 +33,16 @@ def _normalize(capabilities: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _candidate_row(item: dict[str, Any]) -> dict[str, Any]:
-    gates = [str(x) for x in _as_list(item.get("claim_gate")) if str(x).strip()]
-    validation = [str(x) for x in _as_list(item.get("required_validation")) if str(x).strip()]
+    gates = [str(x) for x in as_list(item.get("claim_gate")) if str(x).strip()]
+    validation = [str(x) for x in as_list(item.get("required_validation")) if str(x).strip()]
     suppressors = list(item.get("family_suppressed_by") or item.get("overlap_suppressed_by") or [])
     return {
         "category": str(item.get("category") or ""),
         "label": str(item.get("label") or item.get("category") or ""),
         "confidence": str(item.get("confidence") or "low"),
         "claim_level": str(item.get("claim_level") or "static capability"),
-        "matched_terms": [str(x) for x in _as_list(item.get("matched_terms")) if str(x).strip()][:8],
-        "evidence_count": len([x for x in _as_list(item.get("evidence")) if str(x).strip()]),
+        "matched_terms": [str(x) for x in as_list(item.get("matched_terms")) if str(x).strip()][:8],
+        "evidence_count": len([x for x in as_list(item.get("evidence")) if str(x).strip()]),
         "next_validation": (gates + validation)[:6],
         "noise_suppressed_by": [str(x) for x in suppressors],
     }
@@ -79,7 +60,7 @@ def build_attack_technique_plan(capabilities: list[dict[str, Any]], max_families
         items.sort(
             key=lambda item: (
                 rank_confidence(item.get("confidence")),
-                len(_as_list(item.get("matched_terms"))),
+                len(as_list(item.get("matched_terms"))),
             ),
             reverse=True,
         )

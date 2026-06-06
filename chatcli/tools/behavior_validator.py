@@ -7,6 +7,7 @@ from typing import Any
 
 from ._json_utils import load_json
 from ._text_utils import short_text
+from ._analysis_collectors import as_list, collect_analysis_items
 from .base import Tool, ToolResult, coerce_str_list
 from .behavior_rules import CAPABILITY_RULES
 from .behavior_hierarchy import BEHAVIOR_FAMILIES, CATEGORY_TO_FAMILY
@@ -14,38 +15,8 @@ from .attack_technique_rules import HIGH_IMPACT
 from .behavior_confidence import rank_confidence
 
 
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
 def _collect(value: Any, caps: list[dict[str, Any]], chain: list[dict[str, Any]], audits: list[dict[str, Any]]) -> None:
-    if isinstance(value, dict):
-        candidates = value.get("capabilities")
-        if isinstance(candidates, list):
-            caps.extend(item for item in candidates if isinstance(item, dict))
-        steps = value.get("steps")
-        if isinstance(steps, list):
-            chain.extend(item for item in steps if isinstance(item, dict))
-        attack_chain = value.get("attack_chain")
-        if isinstance(attack_chain, list):
-            chain.extend(item for item in attack_chain if isinstance(item, dict))
-        audit = value.get("audit")
-        if isinstance(audit, dict):
-            audits.append(audit)
-        hints = value.get("report_hints")
-        if isinstance(hints, dict):
-            hinted_chain = hints.get("attack_chain")
-            if isinstance(hinted_chain, list):
-                chain.extend(item for item in hinted_chain if isinstance(item, dict))
-        for child in value.values():
-            _collect(child, caps, chain, audits)
-    elif isinstance(value, list):
-        for child in value:
-            _collect(child, caps, chain, audits)
+    collect_analysis_items(value, capabilities=caps, attack_chain=chain, audits=audits)
 
 
 def _add_issue(
@@ -70,8 +41,8 @@ def _validate_capabilities(capabilities: list[dict[str, Any]], issues: list[dict
         category = str(cap.get("category") or "")
         label = str(cap.get("label") or category or "capability")
         confidence = str(cap.get("confidence") or "low")
-        evidence = [x for x in _as_list(cap.get("evidence")) if str(x).strip()]
-        gates = [x for x in _as_list(cap.get("claim_gate")) if str(x).strip()]
+        evidence = [x for x in as_list(cap.get("evidence")) if str(x).strip()]
+        gates = [x for x in as_list(cap.get("claim_gate")) if str(x).strip()]
         claim_level = str(cap.get("claim_level") or "")
 
         if claim_level.lower() == "static capability" and confidence.lower() == "confirmed":
@@ -379,7 +350,7 @@ class BehaviorCoverageMatrixTool(Tool):
             elif cap:
                 status = _coverage_status(cap)
                 confidence = str(cap.get("confidence") or "low")
-                evidence_count = len([x for x in _as_list(cap.get("evidence")) if str(x).strip()])
+                evidence_count = len([x for x in as_list(cap.get("evidence")) if str(x).strip()])
                 gate_status = "needs_validation" if cap.get("claim_gate") else "not_required"
                 coverage[status].append(label)
             else:
@@ -415,7 +386,7 @@ class BehaviorCoverageMatrixTool(Tool):
                 "family_label": family_label,
                 "status": status,
                 "confidence": str(cap.get("confidence") or "low"),
-                "evidence_count": len([x for x in _as_list(cap.get("evidence")) if str(x).strip()]),
+                "evidence_count": len([x for x in as_list(cap.get("evidence")) if str(x).strip()]),
                 "gate_status": "needs_validation" if cap.get("claim_gate") else "not_required",
             })
 

@@ -1,36 +1,18 @@
 """Optional external static-analysis tool integrations."""
 
 import json
+import importlib.util
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from .base import Tool, ToolResult, coerce_bool, coerce_int, coerce_str_list
+from ._static_tool_config import STATIC_ANALYZER_CONFIG_ATTRS, SUPPORTED_STATIC_ANALYZERS
 
 
-SUPPORTED_ANALYZERS = {
-    "capa": {
-        "exe": "capa",
-        "args": lambda target: ["capa", str(target)],
-        "description": "Mandiant capa capability detection",
-    },
-    "die": {
-        "exe": "diec",
-        "args": lambda target: ["diec", str(target)],
-        "description": "Detect It Easy file identification",
-    },
-    "floss": {
-        "exe": "floss",
-        "args": lambda target: ["floss", str(target)],
-        "description": "FLOSS string extraction",
-    },
-    "exiftool": {
-        "exe": "exiftool",
-        "args": lambda target: ["exiftool", str(target)],
-        "description": "ExifTool metadata extraction",
-    },
-}
+SUPPORTED_ANALYZERS = SUPPORTED_STATIC_ANALYZERS
 
 INTERESTING_STATIC_RE = re.compile(
     r"(anti|debug|vm|sandbox|inject|process|thread|service|registry|socket|http|"
@@ -164,6 +146,32 @@ def _build_report_hints(target: Path, analyzer_results: list[dict]) -> dict[str,
     }
 
 
+def _iter_yara_string_hits(match) -> list[tuple[int, str, object]]:
+    """Return YARA string hits across old tuple and new object APIs."""
+    hits: list[tuple[int, str, object]] = []
+    for item in getattr(match, "strings", []) or []:
+        if isinstance(item, tuple) and len(item) == 3:
+            offset, identifier, data = item
+            hits.append((int(offset), str(identifier), data))
+            continue
+
+        identifier = str(getattr(item, "identifier", ""))
+        instances = getattr(item, "instances", None) or []
+        if not instances:
+            hits.append((0, identifier, str(item)))
+            continue
+        for instance in instances:
+            offset = int(getattr(instance, "offset", 0) or 0)
+            data = getattr(instance, "matched_data", None)
+            if data is None:
+                plaintext = getattr(instance, "plaintext", None)
+                data = plaintext() if callable(plaintext) else plaintext
+            if data is None:
+                data = str(instance)
+            hits.append((offset, identifier, data))
+    return hits
+
+
 class ExternalStaticAnalyzeTool(Tool):
     name = "external_static_analyze"
     description = (
@@ -193,12 +201,7 @@ class ExternalStaticAnalyzeTool(Tool):
     def __init__(self, config=None):
         self.config = config
 
-    _CONFIG_PATH_MAP = {
-        "capa": "capa_path",
-        "die": "die_path",
-        "floss": "floss_path",
-        "exiftool": "exiftool_path",
-    }
+    _CONFIG_PATH_MAP = STATIC_ANALYZER_CONFIG_ATTRS
 
     def _resolve_analyzer(self, name: str, spec: dict) -> str | None:
         configured = ""
@@ -208,7 +211,12 @@ class ExternalStaticAnalyzeTool(Tool):
                 configured = getattr(self.config, attr, "") or ""
         if configured and Path(configured).exists():
             return str(Path(configured))
-        return shutil.which(spec["exe"])
+        found = shutil.which(spec["exe"])
+        if found:
+            return found
+        if name in {"capa", "floss"} and importlib.util.find_spec(name) is not None:
+            return f"python-module:{spec.get('module', name)}"
+        return None
 
     def execute(
         self, file_path: str, analyzers: list[str] | None = None,
@@ -243,8 +251,12 @@ class ExternalStaticAnalyzeTool(Tool):
                     "description": spec["description"],
                 })
                 continue
-            cmd = spec["args"](target)
-            cmd[0] = exe
+            if exe.startswith("python-module:"):
+                module_name = exe.removeprefix("python-module:")
+                cmd = [sys.executable, "-m", module_name, *spec["args"](target)[1:]]
+            else:
+                cmd = spec["args"](target)
+                cmd[0] = exe
             try:
                 proc = subprocess.run(
                     cmd,
@@ -429,39 +441,58 @@ class YaraScanTool(Tool):
                 content=f"YARA rule compilation failed: {e}", is_error=True
             )
 
-        # Scan
-        try:
-            if target.is_dir():
-                matches = rules.match(str(target), timeout=60)
+        # Scan. yara-python matches files, so directories are expanded here
+        # instead of passing a directory path to rules.match.
+        if target.is_dir():
+            if recursive:
+                scan_targets = [p for p in target.rglob("*") if p.is_file()]
             else:
-                matches = rules.match(str(target), timeout=60)
-        except Exception as e:
-            return ToolResult(
-                content=f"YARA scan error: {e}", is_error=True
-            )
+                scan_targets = [p for p in target.iterdir() if p.is_file()]
+        else:
+            scan_targets = [target]
 
-        if not matches:
+        all_matches: list[tuple[Path, object]] = []
+        scan_errors: list[dict[str, str]] = []
+        for scan_target in scan_targets:
+            try:
+                for match in rules.match(str(scan_target), timeout=60):
+                    all_matches.append((scan_target, match))
+            except Exception as e:
+                if not target.is_dir():
+                    return ToolResult(
+                        content=f"YARA scan error: {e}", is_error=True
+                    )
+                scan_errors.append({
+                    "path": str(scan_target),
+                    "error": f"{type(e).__name__}: {e}",
+                })
+
+        if not all_matches:
             return ToolResult(
                 content="(no matches)",
                 metadata={
                     "engine": "yara-python",
                     "target": str(target),
+                    "files_scanned": len(scan_targets),
                     "rules_matched": 0,
+                    "scan_errors": scan_errors,
                 },
             )
 
         # Format output
         lines = [f"# YARA Scan (yara-python)", f"", f"Target: {target}", ""]
         rules_detail: list[dict] = []
-        for match in matches:
+        for match_path, match in all_matches:
             rule_detail = {
+                "path": str(match_path),
                 "rule": match.rule,
                 "namespace": getattr(match, "namespace", "default"),
                 "tags": list(getattr(match, "tags", [])),
                 "strings": [],
             }
-            lines.append(f"{match.rule}")
-            for offset, identifier, data in getattr(match, "strings", []):
+            prefix = f"{match_path}: " if target.is_dir() else ""
+            lines.append(f"{prefix}{match.rule}")
+            for offset, identifier, data in _iter_yara_string_hits(match):
                 hex_data = data.hex() if isinstance(data, bytes) else str(data)
                 rule_detail["strings"].append({
                     "offset": hex(offset),
@@ -477,8 +508,10 @@ class YaraScanTool(Tool):
             metadata={
                 "engine": "yara-python",
                 "target": str(target),
-                "rules_matched": len(matches),
+                "files_scanned": len(scan_targets),
+                "rules_matched": len(all_matches),
                 "rules": rules_detail,
+                "scan_errors": scan_errors,
             },
         )
 

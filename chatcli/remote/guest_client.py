@@ -49,12 +49,33 @@ class GuestAgentClient:
         r.raise_for_status()
         return r.json()
 
+    def server_status(self, probes: bool = False) -> dict:
+        """Return remote server metrics and recent case status."""
+        r = self.client.get(
+            f"{self.base_url}/api/v1/status",
+            params={"probes": "true" if probes else "false"},
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def security_status(self) -> dict:
+        """Return defensive post-analysis indicators from the remote server."""
+        r = self.client.get(
+            f"{self.base_url}/api/v1/security/status",
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     # ── Case management ─────────────────────────────────────
 
     def prepare_case(
         self,
         case_id: str = "",
         analysis_plan: dict | None = None,
+        sample_path: str = "",
+        dynamic_config: dict | None = None,
     ) -> dict:
         """Create a new analysis case. Returns {case_id, status, case_dir}."""
         body = {}
@@ -64,6 +85,10 @@ class GuestAgentClient:
             body["analysis_plan"] = analysis_plan
         else:
             body["analysis_plan"] = {"static": True}
+        if sample_path:
+            body["sample_path"] = sample_path
+        if dynamic_config:
+            body["dynamic_config"] = dynamic_config
 
         r = self.client.post(
             f"{self.base_url}/api/v1/cases/prepare",
@@ -88,11 +113,25 @@ class GuestAgentClient:
         r.raise_for_status()
         return r.json()
 
-    def run_analysis(self, case_id: str, mode: str = "real") -> dict:
+    def run_analysis(
+        self,
+        case_id: str,
+        mode: str = "real",
+        sample_path: str = "",
+        analysis_plan: dict | None = None,
+        dynamic_config: dict | None = None,
+    ) -> dict:
         """Trigger analysis. Returns {case_id, status}."""
+        body: dict = {"mode": mode}
+        if sample_path:
+            body["sample_path"] = sample_path
+        if analysis_plan:
+            body["analysis_plan"] = analysis_plan
+        if dynamic_config:
+            body["dynamic_config"] = dynamic_config
         r = self.client.post(
             f"{self.base_url}/api/v1/cases/{case_id}/run",
-            json={"mode": mode},
+            json=body,
             headers=self._headers(),
         )
         r.raise_for_status()

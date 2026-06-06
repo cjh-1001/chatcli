@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .base import Tool, ToolResult
 
 
@@ -14,16 +16,21 @@ class RemoteGuestTool(Tool):
         "Interact with the remote analysis Guest Agent on Tencent Cloud. "
         "This is the main channel for remote operations. Actions:\n"
         "  health    — Check if Guest Agent is running\n"
+        "  metrics   — Show remote server metrics and recent cases\n"
+        "  security  — Collect post-analysis server compromise indicators\n"
         "  tools     — List configured analysis tools and their paths\n"
         "  exec      — Execute an analysis command directly on the remote server\n"
         "  prepare   — Create a new analysis case\n"
         "  upload    — Upload sample file to a case\n"
-        "  run       — Trigger static/dynamic analysis on uploaded sample\n"
+        "  run       — Trigger static/dynamic analysis on uploaded or remote-path sample\n"
+        "  analyze   — Prepare and run static→dynamic→network→verify for a remote sample\n"
         "  status    — Check case progress and result file list\n"
         "  download  — Download all results as ZIP and extract locally\n"
         "  list      — List all cases on the remote server\n"
         "\n"
         "Quick path (file already on remote server):\n"
+        "  prepare sample_path='C:\\samples\\mal.exe' → create case without upload\n"
+        "  run case_id=<id> → analyze that remote sample path\n"
         "  exec command='binary_inspect C:\\samples\\mal.exe' → direct output\n"
         "  exec command='capa C:\\samples\\mal.exe -j' → direct output\n"
         "\n"
@@ -41,7 +48,10 @@ class RemoteGuestTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["health", "tools", "exec", "prepare", "upload", "run", "status", "download", "list"],
+                "enum": [
+                    "health", "metrics", "security", "tools", "exec",
+                    "prepare", "upload", "run", "analyze", "status", "download", "list"
+                ],
                 "description": "Action to perform.",
             },
             "case_id": {
@@ -51,6 +61,22 @@ class RemoteGuestTool(Tool):
             "file_path": {
                 "type": "string",
                 "description": "Local file path to upload (required for upload).",
+            },
+            "sample_path": {
+                "type": "string",
+                "description": "Remote sample path already present on the Guest Agent server.",
+            },
+            "analysis_plan": {
+                "type": "object",
+                "description": "Optional analysis plan, e.g. {'static': true, 'dynamic': true, 'network': true}.",
+            },
+            "dynamic_config": {
+                "type": "object",
+                "description": "Optional dynamic-analysis settings for the remote job runner.",
+            },
+            "include_probes": {
+                "type": "boolean",
+                "description": "For metrics: include command probes such as netstat/tasklist. Default false.",
             },
             "mode": {
                 "type": "string",
@@ -95,8 +121,12 @@ class RemoteGuestTool(Tool):
         action: str,
         case_id: str = "",
         file_path: str = "",
+        sample_path: str = "",
+        analysis_plan: dict | None = None,
+        dynamic_config: dict | None = None,
         mode: str = "real",
         output_dir: str = "",
+        include_probes: bool = False,
         **kwargs,
     ) -> ToolResult:
         try:
@@ -117,13 +147,58 @@ class RemoteGuestTool(Tool):
                     metadata=data,
                 )
 
+            elif action == "metrics":
+                data = client.server_status(probes=bool(include_probes or kwargs.get("include_probes")))
+                disk = data.get("disk", {})
+                tools_total = data.get("tool_count", 0)
+                tools_ok = data.get("tools_available", 0)
+                cases = data.get("cases", [])
+                lines = [
+                    f"Remote server: {data.get('hostname', '?')}",
+                    f"Platform: {data.get('platform', '?')}",
+                    f"Workdir: {data.get('workdir', '?')}",
+                    f"Disk free: {int(disk.get('free_bytes', 0)):,} / {int(disk.get('total_bytes', 0)):,} bytes",
+                    f"Tools: {tools_ok}/{tools_total} available",
+                    f"Recent cases: {len(cases)}",
+                ]
+                for case in cases[-10:]:
+                    lines.append(f"  {case.get('case_id')} — {case.get('status')}")
+                return ToolResult(content="\n".join(lines), metadata=data)
+
+            elif action == "security":
+                data = client.security_status()
+                findings = data.get("findings", [])
+                lines = [
+                    f"Security snapshot: {data.get('hostname', '?')}",
+                    f"Risk level: {data.get('risk_level', 'unknown')}",
+                    f"Findings: {len(findings)}",
+                ]
+                for finding in findings:
+                    lines.append(
+                        f"  [{finding.get('severity', '?')}] {finding.get('title', '')}: "
+                        f"{finding.get('detail', '')}"
+                    )
+                lines.append(f"Recent result dirs: {len(data.get('recent_results', []))}")
+                return ToolResult(content="\n".join(lines), metadata=data)
+
             elif action == "tools":
                 data = client.list_tools()
                 tools = data.get("tools", {})
-                lines = ["Remote analysis tools:"]
+                lines = ["Remote server analysis tools:"]
                 for name, info in sorted(tools.items()):
-                    status = "✅" if info.get("available") else "❌"
-                    lines.append(f"  {status} {name}: {info.get('path', '?')}")
+                    status = "OK" if info.get("available") else "MISSING"
+                    detail = (
+                        info.get("path")
+                        or info.get("command")
+                        or info.get("module")
+                        or info.get("description")
+                        or info.get("kind")
+                        or "?"
+                    )
+                    kind = info.get("kind", "")
+                    suffix = f" [{kind}]" if kind else ""
+                    package = f" package={info.get('package')}" if info.get("package") else ""
+                    lines.append(f"  {status} {name}{suffix}: {detail}{package}")
                 return ToolResult(content="\n".join(lines), metadata=data)
 
             elif action == "exec":
@@ -147,11 +222,19 @@ class RemoteGuestTool(Tool):
                 )
 
             elif action == "prepare":
-                data = client.prepare_case(case_id=case_id)
+                remote_sample = sample_path or str(kwargs.get("sample_path", "") or "")
+                data = client.prepare_case(
+                    case_id=case_id,
+                    analysis_plan=analysis_plan or kwargs.get("analysis_plan"),
+                    sample_path=remote_sample,
+                    dynamic_config=dynamic_config or kwargs.get("dynamic_config"),
+                )
                 return ToolResult(
                     content=(
                         f"Case prepared: {data['case_id']}\n"
                         f"Status: {data['status']}"
+                        + (f"\nRemote sample: {data.get('sample_path', '')}" if data.get("sample_path") else "")
+                        + (f"\nSample exists: {data.get('sample_exists')}" if data.get("sample_path") else "")
                     ),
                     metadata=data,
                 )
@@ -178,7 +261,13 @@ class RemoteGuestTool(Tool):
                     return ToolResult(
                         content="run requires case_id", is_error=True
                     )
-                data = client.run_analysis(case_id, mode=mode)
+                data = client.run_analysis(
+                    case_id,
+                    mode=mode,
+                    sample_path=sample_path or str(kwargs.get("sample_path", "") or ""),
+                    analysis_plan=analysis_plan or kwargs.get("analysis_plan"),
+                    dynamic_config=dynamic_config or kwargs.get("dynamic_config"),
+                )
                 return ToolResult(
                     content=(
                         f"Analysis: {data['case_id']}\n"
@@ -187,6 +276,45 @@ class RemoteGuestTool(Tool):
                     ),
                     is_error=data.get("status") in ("failed", "timeout", "already_running"),
                     metadata=data,
+                )
+
+            elif action == "analyze":
+                remote_sample = sample_path or str(kwargs.get("sample_path", "") or "")
+                if not remote_sample:
+                    return ToolResult(
+                        content="analyze requires sample_path pointing to the remote server file",
+                        is_error=True,
+                    )
+                plan = analysis_plan or kwargs.get("analysis_plan") or {
+                    "static": True,
+                    "ida": True,
+                    "reverse": False,
+                    "dynamic": True,
+                    "network": True,
+                    "verify": True,
+                }
+                dyn = dynamic_config or kwargs.get("dynamic_config") or {
+                    "timeout_seconds": 300,
+                    "collectors": ["sysmon", "pcap", "tshark"],
+                }
+                prepared = client.prepare_case(
+                    case_id=case_id,
+                    analysis_plan=plan,
+                    sample_path=remote_sample,
+                    dynamic_config=dyn,
+                )
+                cid = prepared["case_id"]
+                result = client.run_analysis(cid, mode=mode)
+                return ToolResult(
+                    content=(
+                        f"Analysis case: {cid}\n"
+                        f"Remote sample: {remote_sample}\n"
+                        f"Sample exists: {prepared.get('sample_exists')}\n"
+                        f"Status: {result.get('status')}"
+                        + (f"\nError: {result.get('error', '')}" if result.get("error") else "")
+                    ),
+                    is_error=result.get("status") in ("failed", "timeout", "already_running"),
+                    metadata={"prepared": prepared, "run": result},
                 )
 
             elif action == "status":

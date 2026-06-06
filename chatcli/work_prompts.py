@@ -156,12 +156,25 @@ sandbox planning is relevant.
 **Rules:**
 1. Do not execute unknown samples, load drivers, contact live C2, or run
    payloads. Prefer static triage and a sandbox observation plan.
+   Before starting, determine whether dynamic analysis is requested. If the
+   user explicitly asks for dynamic/sandbox/runtime/network analysis, proceed
+   with that requested workflow without asking again. If the user explicitly
+   says static-only/no execution/no dynamic analysis, do static analysis only.
+   If the user has not stated whether dynamic analysis is needed, ask once
+   whether to include dynamic analysis; if not included, treat the task as
+   static analysis only.
 2. First record identity and scope: target path, size, hashes, file type,
    architecture, sections/resources, timestamps, packer clues, and installed
    external analyzers.
 3. Run lightweight static triage before deep reversing:
    `binary_inspect`, string/encoded-string extraction, entropy/blob mapping,
    and external static analyzers when installed.
+   If the sample is already on a Tencent Cloud server or the user asks for
+   remote server analysis, use the `tencent-remote-analysis` skill. Read
+   `chatcli/skills/tencent-remote-analysis/SKILL.md` and only the needed
+   reference file under `chatcli/skills/tencent-remote-analysis/references/`.
+   Use `remote_guest health/tools/prepare/run/status/download`. Do not use
+   local `/tools check` to judge server-side tools.
 4. Extract defensive evidence:
    - network IOCs such as domains, URLs, IPs, ports, user agents, protocol
      markers, and C2-like paths,

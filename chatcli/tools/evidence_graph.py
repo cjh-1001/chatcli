@@ -7,42 +7,19 @@ from typing import Any
 
 from ._json_utils import load_json
 from ._text_utils import short_text
+from ._analysis_collectors import as_text_list, collect_analysis_items
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 
 
 def _find_lists(value: Any, capabilities: list[dict[str, Any]], attack_chain: list[dict[str, Any]]) -> None:
-    if isinstance(value, dict):
-        caps = value.get("capabilities")
-        if isinstance(caps, list):
-            capabilities.extend(item for item in caps if isinstance(item, dict))
-        chain = value.get("attack_chain")
-        if isinstance(chain, list):
-            attack_chain.extend(item for item in chain if isinstance(item, dict))
-        steps = value.get("steps")
-        if isinstance(steps, list):
-            attack_chain.extend(item for item in steps if isinstance(item, dict))
-        hints = value.get("report_hints")
-        if isinstance(hints, dict):
-            chain = hints.get("attack_chain")
-            if isinstance(chain, list):
-                attack_chain.extend(item for item in chain if isinstance(item, dict))
-            candidates = hints.get("key_capability_candidates")
-            if isinstance(candidates, list):
-                for item in candidates:
-                    if isinstance(item, dict):
-                        capabilities.append({
-                            "category": item.get("category", "report_candidate"),
-                            "label": item.get("category", "报告能力候选"),
-                            "matched_terms": [item.get("technique", "")],
-                            "evidence": [item.get("evidence", "")],
-                            "confidence": item.get("confidence", "low"),
-                            "required_validation": [],
-                        })
-        for child in value.values():
-            _find_lists(child, capabilities, attack_chain)
-    elif isinstance(value, list):
-        for child in value:
-            _find_lists(child, capabilities, attack_chain)
+    collect_analysis_items(
+        value,
+        capabilities=capabilities,
+        attack_chain=attack_chain,
+        include_report_candidates=True,
+        report_candidate_category_default="report_candidate",
+        report_candidate_label_default="报告能力候选",
+    )
 
 
 def _add_node(
@@ -67,13 +44,7 @@ def _add_edge(edges: list[dict[str, str]], source: str, target: str, edge_type: 
 
 
 def _as_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value] if value.strip() else []
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    return [str(value)]
+    return as_text_list(value)
 
 
 def _dedupe_attack_chain(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

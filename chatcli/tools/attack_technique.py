@@ -7,45 +7,14 @@ from typing import Any
 
 from ._json_utils import load_json
 from ._text_utils import short_text
+from ._analysis_collectors import as_list, collect_analysis_items
 from .base import Tool, ToolResult, coerce_int, coerce_str_list
 from .attack_technique_rules import HIGH_IMPACT, TECHNIQUE_MAP
 from .behavior_confidence import lower_confidence, rank_confidence
 
 
-
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-
 def _collect(value: Any, caps: list[dict[str, Any]], chain: list[dict[str, Any]], audits: list[dict[str, Any]]) -> None:
-    if isinstance(value, dict):
-        capabilities = value.get("capabilities")
-        if isinstance(capabilities, list):
-            caps.extend(item for item in capabilities if isinstance(item, dict))
-        steps = value.get("steps")
-        if isinstance(steps, list):
-            chain.extend(item for item in steps if isinstance(item, dict))
-        attack_chain = value.get("attack_chain")
-        if isinstance(attack_chain, list):
-            chain.extend(item for item in attack_chain if isinstance(item, dict))
-        audit = value.get("audit")
-        if isinstance(audit, dict):
-            audits.append(audit)
-        hints = value.get("report_hints")
-        if isinstance(hints, dict):
-            hinted_chain = hints.get("attack_chain")
-            if isinstance(hinted_chain, list):
-                chain.extend(item for item in hinted_chain if isinstance(item, dict))
-        for child in value.values():
-            _collect(child, caps, chain, audits)
-    elif isinstance(value, list):
-        for child in value:
-            _collect(child, caps, chain, audits)
+    collect_analysis_items(value, capabilities=caps, attack_chain=chain, audits=audits)
 
 
 def _unsupported_categories(audits: list[dict[str, Any]]) -> set[str]:
@@ -96,7 +65,7 @@ def _mapping_status(
     needs_validation: set[str],
     chain_state: dict[str, dict[str, Any]],
 ) -> tuple[str, str]:
-    evidence = [x for x in _as_list(cap.get("evidence")) if str(x).strip()]
+    evidence = [x for x in as_list(cap.get("evidence")) if str(x).strip()]
     if category in unsupported or not evidence:
         return "blocked", "mapping lacks direct supporting evidence"
     chain = chain_state.get(category, {})
@@ -170,7 +139,7 @@ def _build_mappings(
                 "status_reason": reason,
                 "confidence": confidence,
                 "matched_terms": cap.get("matched_terms", []),
-                "evidence": cap.get("evidence", [])[:6] if isinstance(cap.get("evidence"), list) else _as_list(cap.get("evidence"))[:6],
+                "evidence": cap.get("evidence", [])[:6] if isinstance(cap.get("evidence"), list) else as_list(cap.get("evidence"))[:6],
                 "in_attack_chain": category in chain_categories,
                 "claim_gate": cap.get("claim_gate", []),
             })
