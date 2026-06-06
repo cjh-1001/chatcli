@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -162,9 +163,12 @@ async def tools_list(authorization: str | None = Header(None)):
     _auth(authorization)
     tools = {}
     for name, path in sorted(TOOL_PATHS.items()):
-        # Split out executable part for commands with args (e.g. "py -3 -m capa")
-        parts = path.split(None, 1)
-        exe_str = parts[0].strip('\"')
+        # Parse command - handle quoted paths like '"C:\...\python.exe" -m capa'
+        try:
+            argv = shlex.split(path, posix=False)
+        except ValueError:
+            argv = path.split()
+        exe_str = argv[0] if argv else path
         exe = Path(exe_str)
         available = exe.is_file() if exe.is_absolute() else shutil.which(exe_str) is not None
         tools[name] = {"path": path, "available": available}
@@ -344,8 +348,11 @@ async def _startup():
     for d in [CASES_DIR, OUTBOX_DIR]:
         d.mkdir(parents=True, exist_ok=True)
     def _tool_available(tool_path: str) -> bool:
-        parts = tool_path.split(None, 1)
-        exe_str = parts[0].strip('"')
+        try:
+            argv = shlex.split(tool_path, posix=False)
+        except ValueError:
+            argv = tool_path.split()
+        exe_str = argv[0] if argv else tool_path
         exe = Path(exe_str)
         return exe.is_file() if exe.is_absolute() else shutil.which(exe_str) is not None
     available = sum(1 for t in TOOL_PATHS.values() if _tool_available(t))
