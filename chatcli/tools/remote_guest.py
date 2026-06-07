@@ -18,6 +18,7 @@ class RemoteGuestTool(Tool):
         "  health    — Check if Guest Agent is running\n"
         "  metrics   — Show remote server metrics and recent cases\n"
         "  security  — Collect post-analysis server compromise indicators\n"
+        "  monitor   — Collect live process/network/registry/task/file telemetry\n"
         "  tools     — List configured analysis tools and their paths\n"
         "  exec      — Execute an analysis command directly on the remote server\n"
         "  prepare   — Create a new analysis case\n"
@@ -49,14 +50,14 @@ class RemoteGuestTool(Tool):
             "action": {
                 "type": "string",
                 "enum": [
-                    "health", "metrics", "security", "tools", "exec",
+                    "health", "metrics", "security", "monitor", "tools", "exec",
                     "prepare", "upload", "run", "analyze", "status", "download", "list"
                 ],
                 "description": "Action to perform.",
             },
             "case_id": {
                 "type": "string",
-                "description": "Case ID (required for upload, run, status, download).",
+                "description": "Case ID (required for upload, run, status, download; optional for monitor).",
             },
             "file_path": {
                 "type": "string",
@@ -179,6 +180,30 @@ class RemoteGuestTool(Tool):
                         f"{finding.get('detail', '')}"
                     )
                 lines.append(f"Recent result dirs: {len(data.get('recent_results', []))}")
+                return ToolResult(content="\n".join(lines), metadata=data)
+
+            elif action == "monitor":
+                data = client.monitor_snapshot(
+                    case_id=case_id,
+                    probes=bool(include_probes or kwargs.get("include_probes", True)),
+                )
+                agents = data.get("observer_agents", [])
+                traffic = data.get("traffic_capture", {})
+                dyn = data.get("dynamic_status", {})
+                lines = [
+                    f"Monitor snapshot: {data.get('hostname', '?')}",
+                    f"Case: {data.get('case_id') or '(latest)'}",
+                    f"Dynamic status: {dyn.get('status', 'none')}",
+                    f"Traffic capture: {traffic.get('pcap_bytes', 0)} bytes"
+                    + (" active" if traffic.get("active") else ""),
+                    f"Recent files: {len(data.get('file_activity', []))}",
+                    f"Observer agents: {len(agents)}",
+                ]
+                for agent in agents:
+                    lines.append(
+                        f"  {agent.get('name', '?')} [{agent.get('status', '?')}]: "
+                        f"{agent.get('summary', '')}"
+                    )
                 return ToolResult(content="\n".join(lines), metadata=data)
 
             elif action == "tools":

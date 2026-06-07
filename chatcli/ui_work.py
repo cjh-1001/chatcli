@@ -30,6 +30,7 @@ SMART_WORK_PANEL = """[bold green]SMART WORK[/]
 USER_CHOICE_MARKER = "USER CHOICE REQUIRED"
 PLAN_READY_MARKER = "PLAN READY"
 TASK_COMPLETE_MARKER = "TASK COMPLETE"
+PHASE_COMPLETE_MARKER = "PHASE COMPLETE"
 
 
 ACTION_PATTERNS = [
@@ -159,7 +160,7 @@ class WorkCommandMixin:
             "[dim]Static defensive analysis; unknown samples will not be executed.[/]",
             border_style="magenta", padding=(0,1)
         ))
-        self._run_work_loop(MALWARE_TRIAGE_PROMPT, allow_pauses=False, max_cycles=max(60, self._max_work_cycles()))
+        self._run_work_loop(MALWARE_TRIAGE_PROMPT, allow_pauses=True, max_cycles=self._max_work_cycles())
     def _handle_malware(self, a: str):
         scope = a.strip() if a else "current workspace"
         self._start_malware_triage(scope)
@@ -547,6 +548,8 @@ class WorkCommandMixin:
         return False
     def _needs_user_choice(self, result: str) -> bool:
         return USER_CHOICE_MARKER in (result or "").upper()
+    def _needs_phase_pause(self, result: str) -> bool:
+        return PHASE_COMPLETE_MARKER in (result or "").upper()
     def _is_scope_confirmation_request(self, result: str) -> bool:
         text = (result or "").lower()
         return (
@@ -719,6 +722,12 @@ class WorkCommandMixin:
                     f"{WORK_CONTINUE_PROMPT}"
                 )
                 continue
+            if self._is_malware_task() and self._needs_phase_pause(result):
+                if allow_pauses:
+                    self.console.print(
+                        f"[yellow]phase complete[/] [dim]{self._format_work_progress()} - /work continue[/]"
+                    )
+                    return
             if cycle >= max_cycles:
                 break
             status = get_task_status(self.config.workspace) or {}
@@ -772,4 +781,3 @@ class WorkCommandMixin:
                 f"[yellow]paused[/] [dim]{max_cycles} cycles | "
                 f"{self._format_work_progress()} | /work continue[/]"
             )
-

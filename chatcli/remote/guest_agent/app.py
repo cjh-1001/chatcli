@@ -269,6 +269,142 @@ def _security_status_snapshot() -> dict[str, Any]:
     }
 
 
+def _latest_dynamic_status(case_id: str = "") -> dict[str, Any]:
+    outbox_root = DEFAULT_WORKDIR / "outbox"
+    candidates: list[Path] = []
+    if case_id:
+        candidates.append(outbox_root / case_id / "dynamic" / "dynamic_status.json")
+    elif outbox_root.is_dir():
+        candidates = sorted(
+            outbox_root.glob("*/dynamic/dynamic_status.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["status_file"] = str(path)
+                return data
+            except Exception as exc:
+                return {"status": "unreadable", "status_file": str(path), "error": str(exc)}
+    return {}
+
+
+def _recent_file_activity(case_id: str = "", limit: int = 30) -> list[dict[str, Any]]:
+    roots: list[Path] = []
+    if case_id:
+        roots.extend([DEFAULT_CASES_DIR / case_id, DEFAULT_WORKDIR / "outbox" / case_id])
+    configured = os.environ.get("CHATCLI_MONITOR_PATHS", "").strip()
+    if configured:
+        roots.extend(Path(item).expanduser() for item in configured.split(os.pathsep) if item.strip())
+    if not roots:
+        roots.extend([DEFAULT_WORKDIR / "outbox", DEFAULT_CASES_DIR])
+
+    seen: set[Path] = set()
+    files: list[dict[str, Any]] = []
+    for root in roots:
+        if not root.exists() or root in seen:
+            continue
+        seen.add(root)
+        scanned = 0
+        paths = root.rglob("*") if root.is_dir() else [root]
+        for path in paths:
+            scanned += 1
+            if scanned > 3000:
+                break
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+                files.append({
+                    "path": str(path),
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+            except OSError:
+                continue
+    return sorted(files, key=lambda item: item["mtime"], reverse=True)[:limit]
+
+
+def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[str, Any]:
+    probes: dict[str, Any] = {}
+    if include_probes:
+        probes["processes"] = _run_probe("tasklist /fo csv /nh" if os.name == "nt" else "ps aux", timeout=10)
+        probes["network_connections"] = _run_probe("netstat -ano" if os.name == "nt" else "ss -tunap", timeout=10)
+        if os.name == "nt":
+            probes.update({
+                "registry_run_hkcu": _run_probe(r'reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"', timeout=8),
+                "registry_run_hklm": _run_probe(r'reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run"', timeout=8),
+                "scheduled_tasks": _run_probe("schtasks /query /fo LIST /v", timeout=15),
+                "services": _run_probe("sc query state= all", timeout=12),
+            })
+        else:
+            probes.update({
+                "scheduled_tasks": _run_probe("crontab -l", timeout=8),
+                "services": _run_probe("systemctl --no-pager --type=service --state=running", timeout=12),
+            })
+
+    dynamic_status = _latest_dynamic_status(case_id)
+    pcap_path = Path(dynamic_status.get("outputs", {}).get("network_pcap", "")) if dynamic_status else Path()
+    pcap_bytes = pcap_path.stat().st_size if pcap_path.is_file() else 0
+    file_activity = _recent_file_activity(case_id)
+
+    def probe_state(name: str) -> str:
+        if name not in probes:
+            return "not_collected"
+        return "ok" if probes[name].get("exit_code") == 0 else "review"
+
+    observer_agents = [
+        {
+            "name": "process-observer",
+            "role": "process_tree",
+            "status": probe_state("processes"),
+            "summary": "Process snapshot collected; use raw probe output for PID/name review.",
+        },
+        {
+            "name": "network-observer",
+            "role": "live_network",
+            "status": "collecting" if dynamic_status.get("status") in {"collecting", "collected"} else probe_state("network_connections"),
+            "summary": f"Live connections probed; capture file bytes={pcap_bytes}.",
+        },
+        {
+            "name": "registry-observer",
+            "role": "registry_persistence",
+            "status": probe_state("registry_run_hkcu") if os.name == "nt" else "not_applicable",
+            "summary": "Windows Run key probes collected." if os.name == "nt" else "Registry probes are Windows-only.",
+        },
+        {
+            "name": "persistence-observer",
+            "role": "scheduled_tasks_services",
+            "status": probe_state("scheduled_tasks"),
+            "summary": "Scheduled task and service probes collected.",
+        },
+        {
+            "name": "filesystem-observer",
+            "role": "file_activity",
+            "status": "ok",
+            "summary": f"{len(file_activity)} recent file entries tracked.",
+        },
+    ]
+
+    return {
+        "status": "collected",
+        "timestamp": time.time(),
+        "hostname": platform.node(),
+        "case_id": case_id,
+        "dynamic_status": dynamic_status,
+        "traffic_capture": {
+            "pcap_path": str(pcap_path) if str(pcap_path) != "." else "",
+            "pcap_bytes": pcap_bytes,
+            "active": dynamic_status.get("status") in {"collecting", "collected"},
+        },
+        "file_activity": file_activity,
+        "observer_agents": observer_agents,
+        "probes": probes,
+    }
+
+
 # ── Health ────────────────────────────────────────────────────────
 
 
@@ -305,6 +441,17 @@ async def security_status(authorization: str | None = Header(None)):
     """Return a defensive post-analysis snapshot for compromise review."""
     _authorize(authorization)
     return _security_status_snapshot()
+
+
+@app.get("/api/v1/monitor/snapshot")
+async def monitor_snapshot(
+    case_id: str = "",
+    probes: bool = True,
+    authorization: str | None = Header(None),
+):
+    """Return live host telemetry and observer-agent summaries for dashboards."""
+    _authorize(authorization)
+    return _monitor_snapshot(case_id=case_id, include_probes=probes)
 
 
 @app.post("/api/v1/exec")

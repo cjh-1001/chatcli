@@ -409,6 +409,141 @@ def _security_status() -> dict[str, Any]:
     }
 
 
+def _latest_dynamic_status(case_id: str = "") -> dict[str, Any]:
+    candidates: list[Path] = []
+    if case_id:
+        candidates.append(OUTBOX_DIR / case_id / "dynamic" / "dynamic_status.json")
+    elif OUTBOX_DIR.is_dir():
+        candidates = sorted(
+            OUTBOX_DIR.glob("*/dynamic/dynamic_status.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["status_file"] = str(path)
+                return data
+            except Exception as exc:
+                return {"status": "unreadable", "status_file": str(path), "error": str(exc)}
+    return {}
+
+
+def _recent_file_activity(case_id: str = "", limit: int = 30) -> list[dict[str, Any]]:
+    roots: list[Path] = []
+    if case_id:
+        roots.extend([CASES_DIR / case_id, OUTBOX_DIR / case_id])
+    configured = os.environ.get("CHATCLI_MONITOR_PATHS", "").strip()
+    if configured:
+        roots.extend(Path(item).expanduser() for item in configured.split(os.pathsep) if item.strip())
+    if not roots:
+        roots.extend([OUTBOX_DIR, CASES_DIR])
+
+    seen: set[Path] = set()
+    files: list[dict[str, Any]] = []
+    for root in roots:
+        if not root.exists() or root in seen:
+            continue
+        seen.add(root)
+        scanned = 0
+        paths = root.rglob("*") if root.is_dir() else [root]
+        for path in paths:
+            scanned += 1
+            if scanned > 3000:
+                break
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+                files.append({
+                    "path": str(path),
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+            except OSError:
+                continue
+    return sorted(files, key=lambda item: item["mtime"], reverse=True)[:limit]
+
+
+def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[str, Any]:
+    probes: dict[str, Any] = {}
+    if include_probes:
+        probes["processes"] = _run_probe("tasklist /fo csv /nh" if os.name == "nt" else "ps aux", 10)
+        probes["network_connections"] = _run_probe("netstat -ano" if os.name == "nt" else "ss -tunap", 10)
+        if os.name == "nt":
+            probes.update({
+                "registry_run_hkcu": _run_probe(r'reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"', 8),
+                "registry_run_hklm": _run_probe(r'reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run"', 8),
+                "scheduled_tasks": _run_probe("schtasks /query /fo LIST /v", 15),
+                "services": _run_probe("sc query state= all", 12),
+            })
+        else:
+            probes.update({
+                "scheduled_tasks": _run_probe("crontab -l", 8),
+                "services": _run_probe("systemctl --no-pager --type=service --state=running", 12),
+            })
+
+    dynamic_status = _latest_dynamic_status(case_id)
+    pcap_path = Path(dynamic_status.get("outputs", {}).get("network_pcap", "")) if dynamic_status else Path()
+    pcap_bytes = pcap_path.stat().st_size if pcap_path.is_file() else 0
+    file_activity = _recent_file_activity(case_id)
+
+    def probe_state(name: str) -> str:
+        if name not in probes:
+            return "not_collected"
+        return "ok" if probes[name].get("exit_code") == 0 else "review"
+
+    observer_agents = [
+        {
+            "name": "process-observer",
+            "role": "process_tree",
+            "status": probe_state("processes"),
+            "summary": "Process snapshot collected; use raw probe output for PID/name review.",
+        },
+        {
+            "name": "network-observer",
+            "role": "live_network",
+            "status": "collecting" if dynamic_status.get("status") in {"collecting", "collected"} else probe_state("network_connections"),
+            "summary": f"Live connections probed; capture file bytes={pcap_bytes}.",
+        },
+        {
+            "name": "registry-observer",
+            "role": "registry_persistence",
+            "status": probe_state("registry_run_hkcu") if os.name == "nt" else "not_applicable",
+            "summary": "Windows Run key probes collected." if os.name == "nt" else "Registry probes are Windows-only.",
+        },
+        {
+            "name": "persistence-observer",
+            "role": "scheduled_tasks_services",
+            "status": probe_state("scheduled_tasks"),
+            "summary": "Scheduled task and service probes collected.",
+        },
+        {
+            "name": "filesystem-observer",
+            "role": "file_activity",
+            "status": "ok",
+            "summary": f"{len(file_activity)} recent file entries tracked.",
+        },
+    ]
+
+    return {
+        "status": "collected",
+        "timestamp": time.time(),
+        "hostname": platform.node(),
+        "case_id": case_id,
+        "dynamic_status": dynamic_status,
+        "traffic_capture": {
+            "pcap_path": str(pcap_path) if str(pcap_path) != "." else "",
+            "pcap_bytes": pcap_bytes,
+            "active": dynamic_status.get("status") in {"collecting", "collected"},
+        },
+        "file_activity": file_activity,
+        "observer_agents": observer_agents,
+        "probes": probes,
+    }
+
+
 def _resolve_sample(case_id: str, job: dict[str, Any]) -> Path:
     configured = str(job.get("sample_path", "") or "").strip()
     if configured:
@@ -516,35 +651,137 @@ def _run_static(case_id: str, outbox: Path, sample: Path, mode: str) -> tuple[li
     return done, failed
 
 
-def _run_dynamic_placeholder(outbox: Path, mode: str) -> list[str]:
+def _run_dynamic_placeholder(
+    outbox: Path,
+    mode: str,
+    sample: Path,
+    dynamic_config: dict[str, Any] | None = None,
+) -> list[str]:
     dynamic_dir = outbox / "dynamic"
     dynamic_dir.mkdir(parents=True, exist_ok=True)
     tools = _resolve_tool_paths()
-    _write_json(dynamic_dir / "dynamic_status.json", {
-        "status": "placeholder",
-        "mode": mode,
-        "note": (
-            "Dynamic collectors are configured but not executed automatically yet. "
-            "Procmon/Sysmon/PCAP collection should be started with explicit collector logic "
-            "to avoid launching GUI tools unexpectedly."
-        ),
-        "collectors": {
-            "procmon": {
-                "path": tools.get("procmon", ""),
-                "available": _tool_available(tools.get("procmon", "")),
+    cfg = dynamic_config or {}
+    timeout_seconds = int(cfg.get("timeout_seconds") or 60)
+    collectors = set(cfg.get("collectors") or ["procmon", "pcap", "tshark"])
+    interface = str(cfg.get("network_interface") or cfg.get("interface") or "1")
+    network_pcap = dynamic_dir / "network.pcapng"
+    procmon_pml = dynamic_dir / "procmon.pml"
+    events: list[dict[str, Any]] = []
+    availability = {
+        "procmon": _tool_available(tools.get("procmon", "")),
+        "dumpcap": _tool_available(tools.get("dumpcap", "")),
+        "tshark": _tool_available(tools.get("tshark", "")),
+    }
+
+    def record(event: str, **kwargs: Any) -> None:
+        item = {"event": event, "timestamp": time.time()}
+        item.update(kwargs)
+        events.append(item)
+
+    def write_status(status: str, **kwargs: Any) -> None:
+        payload = {
+            "status": status,
+            "mode": mode,
+            "sample_path": str(sample),
+            "timeout_seconds": timeout_seconds,
+            "collectors": sorted(collectors),
+            "tool_availability": availability,
+            "events": events,
+            "outputs": {
+                "procmon_pml": str(procmon_pml),
+                "network_pcap": str(network_pcap),
+                "network_summary": str(dynamic_dir / "network_summary.txt"),
+                "dns": str(dynamic_dir / "dns.txt"),
+                "http": str(dynamic_dir / "http.txt"),
+                "conversations": str(dynamic_dir / "conversations.txt"),
             },
-            "dumpcap": {
-                "path": tools.get("dumpcap", ""),
-                "available": _tool_available(tools.get("dumpcap", "")),
-            },
-            "tshark": {
-                "path": tools.get("tshark", ""),
-                "available": _tool_available(tools.get("tshark", "")),
-            },
-        },
-        "expected_outputs": ["procmon.pml", "network.pcapng", "sysmon_events.json", "network_summary.json"],
-    })
-    return ["dynamic.placeholder"]
+        }
+        payload.update(kwargs)
+        _write_json(dynamic_dir / "dynamic_status.json", payload)
+
+    if mode == "dry_run":
+        record("would_start_packet_capture", before_sample=True, tool=tools.get("dumpcap", ""), interface=interface)
+        record("would_start_procmon", before_sample=True, tool=tools.get("procmon", ""))
+        record("would_execute_sample", sample=str(sample), timeout_seconds=timeout_seconds)
+        record("would_stop_collectors", after_sample=True)
+        record("would_parse_pcap", tool=tools.get("tshark", ""))
+        write_status("dry_run")
+        return ["dynamic.collectors (dry_run)"]
+
+    capture_enabled = "pcap" in collectors and availability["dumpcap"]
+    procmon_enabled = "procmon" in collectors and availability["procmon"]
+    if not capture_enabled and not procmon_enabled:
+        note = "Dynamic analysis skipped: no configured collector is available."
+        (dynamic_dir / "_SKIPPED").write_text(note, encoding="utf-8")
+        record("skipped_no_collectors", reason=note)
+        write_status("skipped", reason=note)
+        return ["dynamic.skipped"]
+
+    dumpcap_proc: subprocess.Popen | None = None
+    try:
+        if capture_enabled:
+            cmd = [tools["dumpcap"], "-i", interface, "-w", str(network_pcap)]
+            dumpcap_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            record("packet_capture_started", before_sample=True, command=cmd, pid=dumpcap_proc.pid)
+            write_status("collecting")
+            time.sleep(2.0)
+
+        if procmon_enabled:
+            cmd = [tools["procmon"], "/AcceptEula", "/Quiet", "/Minimized", "/BackingFile", str(procmon_pml)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            record("procmon_started", before_sample=True, command=cmd, exit_code=proc.returncode, stderr=(proc.stderr or "")[:1000])
+            write_status("collecting")
+            time.sleep(1.0)
+
+        sample_proc = subprocess.Popen([str(sample)], cwd=str(sample.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
+        record("sample_started", pid=sample_proc.pid, timeout_seconds=timeout_seconds)
+        write_status("collecting")
+        try:
+            sample_proc.wait(timeout=max(1, timeout_seconds))
+            record("sample_exited", exit_code=sample_proc.returncode)
+        except subprocess.TimeoutExpired:
+            sample_proc.terminate()
+            try:
+                sample_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                sample_proc.kill()
+                sample_proc.wait(timeout=5)
+            record("sample_timeout_terminated", exit_code=sample_proc.returncode)
+    finally:
+        if procmon_enabled:
+            try:
+                cmd = [tools["procmon"], "/Terminate"]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                record("procmon_stopped", after_sample=True, command=cmd, exit_code=proc.returncode, stderr=(proc.stderr or "")[:1000])
+            except Exception as exc:
+                record("procmon_stop_failed", error=f"{type(exc).__name__}: {exc}")
+        if dumpcap_proc is not None:
+            dumpcap_proc.terminate()
+            try:
+                _, stderr = dumpcap_proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                dumpcap_proc.kill()
+                _, stderr = dumpcap_proc.communicate(timeout=10)
+            record("packet_capture_stopped", after_sample=True, exit_code=dumpcap_proc.returncode, stderr=(stderr or "")[:1000])
+        write_status("collecting")
+
+    if "tshark" in collectors and availability["tshark"] and network_pcap.exists():
+        for output_name, cmd in [
+            ("network_summary.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,ip"]),
+            ("dns.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "dns"]),
+            ("http.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "http"]),
+            ("conversations.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,tcp"]),
+        ]:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            (dynamic_dir / output_name).write_text(
+                (proc.stdout or "") + (("\n[stderr]\n" + proc.stderr) if proc.stderr else ""),
+                encoding="utf-8",
+                errors="replace",
+            )
+            record("pcap_parsed", command=cmd, output=str(dynamic_dir / output_name), exit_code=proc.returncode)
+
+    write_status("collected")
+    return ["dynamic.collectors"]
 
 
 def _find_ida_executable() -> str | None:
@@ -807,7 +1044,7 @@ def _run_job(case_id: str, mode: str) -> dict[str, Any]:
         steps_done.extend(done)
         steps_failed.extend(failed)
     if plan.get("dynamic", False):
-        steps_done.extend(_run_dynamic_placeholder(outbox, mode))
+        steps_done.extend(_run_dynamic_placeholder(outbox, mode, sample, job.get("dynamic_config", {})))
     if plan.get("network", False):
         (outbox / "dynamic").mkdir(parents=True, exist_ok=True)
         (outbox / "dynamic" / "_NETWORK_NOTE").write_text(
@@ -866,6 +1103,12 @@ async def status(probes: bool = False, authorization: str | None = Header(None))
 async def security_status(authorization: str | None = Header(None)):
     _auth(authorization)
     return _security_status()
+
+
+@app.get("/api/v1/monitor/snapshot")
+async def monitor_snapshot(case_id: str = "", probes: bool = True, authorization: str | None = Header(None)):
+    _auth(authorization)
+    return _monitor_snapshot(case_id=case_id, include_probes=probes)
 
 
 @app.post("/api/v1/exec")

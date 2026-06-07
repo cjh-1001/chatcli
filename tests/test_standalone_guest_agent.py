@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -79,6 +80,36 @@ class StandaloneGuestAgentTests(unittest.TestCase):
         self.assertTrue(tools["ida"]["available"])
         self.assertEqual(tools["ida"]["path"], str(ida))
 
+    def test_monitor_endpoint_collects_observer_snapshot(self):
+        case_id = "case-monitor"
+        case_dir = self.base / "cases" / case_id
+        dynamic_dir = self.base / "outbox" / case_id / "dynamic"
+        case_dir.mkdir(parents=True)
+        dynamic_dir.mkdir(parents=True)
+        pcap = dynamic_dir / "network.pcapng"
+        pcap.write_bytes(b"pcap")
+        (dynamic_dir / "dynamic_status.json").write_text(
+            json.dumps({
+                "status": "collecting",
+                "outputs": {"network_pcap": str(pcap)},
+                "events": [{"event": "packet_capture_started"}],
+            }),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(
+            f"/api/v1/monitor/snapshot?case_id={case_id}&probes=false",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "collected")
+        self.assertEqual(data["case_id"], case_id)
+        self.assertEqual(data["traffic_capture"]["pcap_bytes"], 4)
+        self.assertIn("observer_agents", data)
+        self.assertIn("file_activity", data)
+
     def test_remote_sample_path_dry_run(self):
         sample = self.base / "sample.exe"
         sample.write_bytes(b"MZsample")
@@ -107,7 +138,11 @@ class StandaloneGuestAgentTests(unittest.TestCase):
         self.assertTrue((self.base / "outbox" / "case-standalone" / "_DONE").exists())
         dynamic_status = self.base / "outbox" / "case-standalone" / "dynamic" / "dynamic_status.json"
         self.assertTrue(dynamic_status.exists())
-        self.assertIn("procmon", dynamic_status.read_text(encoding="utf-8"))
+        dynamic_data = json.loads(dynamic_status.read_text(encoding="utf-8"))
+        events = [event["event"] for event in dynamic_data["events"]]
+        self.assertLess(events.index("would_start_packet_capture"), events.index("would_execute_sample"))
+        self.assertLess(events.index("would_start_procmon"), events.index("would_execute_sample"))
+        self.assertIn("would_parse_pcap", events)
         self.assertTrue(
             (self.base / "outbox" / "case-standalone" / "verify" / "server_status_after.json").exists()
         )

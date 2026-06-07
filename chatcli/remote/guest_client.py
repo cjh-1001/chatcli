@@ -68,6 +68,19 @@ class GuestAgentClient:
         r.raise_for_status()
         return r.json()
 
+    def monitor_snapshot(self, case_id: str = "", probes: bool = True) -> dict:
+        """Return live monitor telemetry and observer-agent summaries."""
+        params: dict[str, str] = {"probes": "true" if probes else "false"}
+        if case_id:
+            params["case_id"] = case_id
+        r = self.client.get(
+            f"{self.base_url}/api/v1/monitor/snapshot",
+            params=params,
+            headers=self._headers(),
+        )
+        r.raise_for_status()
+        return r.json()
+
     # ── Case management ─────────────────────────────────────
 
     def prepare_case(

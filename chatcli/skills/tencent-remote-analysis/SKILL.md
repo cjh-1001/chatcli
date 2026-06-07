@@ -44,11 +44,20 @@ maintainability.
      static-only.
    - If dynamic scope is not stated, ask once whether dynamic analysis is needed.
      If not included, interpret the task as static analysis only.
+   - If dynamic analysis is included, require a configured rollback method.
+     For Tencent Cloud rollback, use `remote.tencent_snapshot_id`.
 4. Never call heavyweight tools directly with unsafe/no-argument commands. In
    particular, do not call Ghidra `analyzeHeadless` directly with no arguments
    through `remote_guest exec`; use `analysis_plan.ghidra=true`.
 5. Do not claim observed runtime behavior unless actual dynamic artifacts exist,
    such as PCAP, Procmon/Sysmon logs, or parsed network summaries.
+6. After any remote dynamic analysis, download results first, then restore the
+   Tencent Cloud server to the configured rollback snapshot before saying
+   `TASK COMPLETE`. If rollback is unavailable or fails, report the blocker and
+   do not mark the task complete.
+7. During dynamic analysis, use `remote_guest action=monitor case_id=<case-id>`
+   as the live telemetry dashboard source for process, network, registry,
+   scheduled-task, service, file-activity, and observer-agent status.
 
 ## Reference Map
 
@@ -76,8 +85,12 @@ remote_guest action=health
 remote_guest action=tools
 remote_guest action=prepare sample_path=<server-path> analysis_plan=<plan>
 remote_guest action=run case_id=<case-id> mode=real
+remote_guest action=monitor case_id=<case-id>
 remote_guest action=status case_id=<case-id>
 remote_guest action=download case_id=<case-id>
+remote_vm_control action=stop dry_run=false
+remote_vm_control action=restore_snapshot dry_run=false
+remote_vm_control action=status
 ```
 
 After download, inspect `.chatcli/remote_results/<case-id>/` and base the report

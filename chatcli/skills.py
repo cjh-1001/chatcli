@@ -110,7 +110,7 @@ def _derive_triggers(name: str, description: str) -> tuple[str, ...]:
     }
     terms = []
     seen = set()
-    for term in [name, *words, *cjk_terms]:
+    for term in [name, *cjk_terms, *words]:
         key = term.lower()
         if key in stop or key in seen:
             continue

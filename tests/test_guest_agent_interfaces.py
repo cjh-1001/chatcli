@@ -114,6 +114,36 @@ class GuestAgentInterfaceTests(unittest.TestCase):
         self.assertIn("risk_level", data)
         self.assertIn("probes", data)
 
+    def test_monitor_endpoint_collects_observer_snapshot(self):
+        case_id = "case-monitor"
+        case_dir = guest_app.DEFAULT_CASES_DIR / case_id
+        dynamic_dir = self.base / "outbox" / case_id / "dynamic"
+        case_dir.mkdir(parents=True)
+        dynamic_dir.mkdir(parents=True)
+        pcap = dynamic_dir / "network.pcapng"
+        pcap.write_bytes(b"pcap")
+        (dynamic_dir / "dynamic_status.json").write_text(
+            json.dumps({
+                "status": "collecting",
+                "outputs": {"network_pcap": str(pcap)},
+                "events": [{"event": "packet_capture_started"}],
+            }),
+            encoding="utf-8",
+        )
+
+        response = self.client.get(
+            f"/api/v1/monitor/snapshot?case_id={case_id}&probes=false",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "collected")
+        self.assertEqual(data["case_id"], case_id)
+        self.assertEqual(data["traffic_capture"]["pcap_bytes"], 4)
+        self.assertIn("observer_agents", data)
+        self.assertIn("file_activity", data)
+
     def test_prepare_accepts_remote_sample_path_and_writes_job_json(self):
         sample = self.base / "samples" / "sample.bin"
         sample.parent.mkdir()
@@ -183,6 +213,35 @@ class GuestAgentInterfaceTests(unittest.TestCase):
         self.assertEqual(data["status"], "dry_run")
         self.assertEqual(data["sample_sha256"], state.sample_sha256)
 
+    def test_job_runner_dynamic_dry_run_starts_collectors_before_sample(self):
+        sample = self.base / "remote-sample.bin"
+        sample.write_bytes(b"MZsample")
+        job_dir = self.base / "cases" / "case-dynamic-order"
+        job_dir.mkdir(parents=True)
+        (job_dir / "job.json").write_text(
+            json.dumps({
+                "job_id": "case-dynamic-order",
+                "sample_path": str(sample),
+                "analysis_plan": {"static": False, "dynamic": True},
+                "dynamic_config": {
+                    "timeout_seconds": 30,
+                    "collectors": ["pcap", "procmon", "tshark"],
+                    "network_interface": "1",
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        state = run_job(job_dir, mode="dry_run", outbox_root=self.base / "outbox")
+
+        dynamic_status = self.base / "outbox" / "case-dynamic-order" / "dynamic" / "dynamic_status.json"
+        self.assertEqual(state.status, "done")
+        data = json.loads(dynamic_status.read_text(encoding="utf-8"))
+        events = [event["event"] for event in data["events"]]
+        self.assertLess(events.index("would_start_packet_capture"), events.index("would_execute_sample"))
+        self.assertLess(events.index("would_start_procmon"), events.index("would_execute_sample"))
+        self.assertIn("would_parse_pcap", events)
+
     def test_remote_guest_tools_formats_remote_inventory(self):
         class FakeClient:
             def list_tools(self):
@@ -228,6 +287,45 @@ class GuestAgentInterfaceTests(unittest.TestCase):
         self.assertIn("OK ida [headless_reverse]", result.content)
         self.assertIn("OK capa [analysis_python]", result.content)
         self.assertIn("MISSING diec [static_external]", result.content)
+
+    def test_remote_guest_monitor_formats_observer_snapshot(self):
+        class FakeClient:
+            def monitor_snapshot(self, case_id="", probes=True):
+                return {
+                    "hostname": "remote-host",
+                    "case_id": case_id,
+                    "dynamic_status": {"status": "collecting"},
+                    "traffic_capture": {"pcap_bytes": 42, "active": True},
+                    "file_activity": [{"path": "x", "mtime": 1, "size": 1}],
+                    "observer_agents": [
+                        {
+                            "name": "process-observer",
+                            "status": "ok",
+                            "summary": "Process snapshot collected.",
+                        }
+                    ],
+                }
+
+            def close(self):
+                pass
+
+        config = SimpleNamespace(
+            remote=SimpleNamespace(
+                enabled=True,
+                base_url="http://remote:8443",
+                host="",
+                guest_agent_port=8443,
+                guest_agent_token="token",
+            )
+        )
+        tool = RemoteGuestTool(config)
+        with patch.object(tool, "_get_client", return_value=FakeClient()):
+            result = tool.execute(action="monitor", case_id="case-monitor")
+
+        self.assertFalse(result.is_error)
+        self.assertIn("Monitor snapshot: remote-host", result.content)
+        self.assertIn("Dynamic status: collecting", result.content)
+        self.assertIn("process-observer", result.content)
 
 
 if __name__ == "__main__":

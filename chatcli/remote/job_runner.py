@@ -254,43 +254,186 @@ def run_dynamic_analysis(
     vm_config: dict[str, Any] | None = None,
     mode: str = "real",
 ) -> None:
-    """Execute dynamic analysis in Hyper-V sandbox VM.
-
-    Placeholder — Hyper-V VM management is complex and will be
-    implemented once the Tencent Cloud server with Hyper-V is ready.
-    """
+    """Execute dynamic analysis with collectors started before the sample."""
     dynamic_dir = state.outbox_dir / "dynamic"
     dynamic_dir.mkdir(parents=True, exist_ok=True)
+    status_path = dynamic_dir / "dynamic_status.json"
+    network_pcap = dynamic_dir / "network.pcapng"
+    procmon_pml = dynamic_dir / "procmon.pml"
+    vm = vm_config or {}
+    timeout_seconds = int(vm.get("timeout_seconds") or 60)
+    collectors = set(vm.get("collectors") or ["procmon", "pcap", "tshark"])
+    interface = str(vm.get("network_interface") or vm.get("interface") or "1")
+
+    tools = {
+        "procmon": os.environ.get("CHATCLI_TOOL_PROCMON", r"C:\Tools\Procmon64.exe"),
+        "dumpcap": os.environ.get("CHATCLI_TOOL_DUMPCAP", "dumpcap"),
+        "tshark": os.environ.get("CHATCLI_TOOL_TSHARK", "tshark"),
+    }
+    availability = {name: _command_available(command) for name, command in tools.items()}
+    events: list[dict[str, Any]] = []
+
+    def record(event: str, **kwargs: Any) -> None:
+        item = {"event": event, "timestamp": time.time()}
+        item.update(kwargs)
+        events.append(item)
+
+    def write_status(status: str, **kwargs: Any) -> None:
+        payload = {
+            "status": status,
+            "mode": mode,
+            "sample_path": str(state.sample_path),
+            "sample_sha256": state.sample_sha256,
+            "timeout_seconds": timeout_seconds,
+            "collectors": collectors and sorted(collectors),
+            "tool_availability": availability,
+            "events": events,
+            "outputs": {
+                "procmon_pml": str(procmon_pml),
+                "network_pcap": str(network_pcap),
+                "network_summary": str(dynamic_dir / "network_summary.txt"),
+                "dns": str(dynamic_dir / "dns.txt"),
+                "http": str(dynamic_dir / "http.txt"),
+                "conversations": str(dynamic_dir / "conversations.txt"),
+            },
+        }
+        payload.update(kwargs)
+        status_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if mode == "dry_run":
         state.steps_completed.append("dynamic.sandbox (dry_run)")
+        record("would_start_packet_capture", before_sample=True, tool=tools["dumpcap"], interface=interface)
+        record("would_start_procmon", before_sample=True, tool=tools["procmon"])
+        record("would_execute_sample", sample=str(state.sample_path), timeout_seconds=timeout_seconds)
+        record("would_stop_collectors", after_sample=True)
+        record("would_parse_pcap", tool=tools["tshark"])
+        write_status("dry_run")
         return
 
-    vm = vm_config or {}
-    vm_enabled = vm.get("enabled", False)
-
-    if not vm_enabled:
-        note = (
-            "Dynamic analysis not configured. "
-            "Set dynamic.enabled=true in job.json and ensure Hyper-V "
-            "VM 'malware-sandbox' is set up with clean snapshot."
-        )
+    capture_enabled = "pcap" in collectors and availability["dumpcap"]
+    procmon_enabled = "procmon" in collectors and availability["procmon"]
+    if not capture_enabled and not procmon_enabled:
+        note = "Dynamic analysis skipped: no configured collector is available."
         (dynamic_dir / "_SKIPPED").write_text(note, encoding="utf-8")
+        record("skipped_no_collectors", reason=note)
+        write_status("skipped", reason=note)
         return
 
-    # TODO: Full VM execution flow (Phase 3 in plan)
-    # 1. Restore VM snapshot
-    # 2. Start VM
-    # 3. Copy sample into VM
-    # 4. Start Frida hooks + tshark capture
-    # 5. Execute sample with timeout
-    # 6. Stop VM, collect results
-    # 7. Parse outputs into structured JSON
-    (dynamic_dir / "_NOT_IMPLEMENTED").write_text(
-        "Dynamic VM execution not yet implemented. "
-        "Will integrate Hyper-V + Frida + tshark.",
-        encoding="utf-8",
-    )
+    dumpcap_proc: subprocess.Popen | None = None
+    sample_proc: subprocess.Popen | None = None
+    try:
+        if capture_enabled:
+            dumpcap_cmd = [tools["dumpcap"], "-i", interface, "-w", str(network_pcap)]
+            dumpcap_proc = subprocess.Popen(
+                dumpcap_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            record("packet_capture_started", before_sample=True, command=dumpcap_cmd, pid=dumpcap_proc.pid)
+            write_status("collecting")
+            time.sleep(2.0)
+
+        if procmon_enabled:
+            procmon_cmd = [
+                tools["procmon"],
+                "/AcceptEula",
+                "/Quiet",
+                "/Minimized",
+                "/BackingFile",
+                str(procmon_pml),
+            ]
+            completed = subprocess.run(procmon_cmd, capture_output=True, text=True, timeout=20)
+            record(
+                "procmon_started",
+                before_sample=True,
+                command=procmon_cmd,
+                exit_code=completed.returncode,
+                stderr=(completed.stderr or "")[:1000],
+            )
+            write_status("collecting")
+            time.sleep(1.0)
+
+        sample_proc = subprocess.Popen(
+            [str(state.sample_path)],
+            cwd=str(state.sample_path.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+        )
+        record("sample_started", pid=sample_proc.pid, timeout_seconds=timeout_seconds)
+        write_status("collecting")
+        try:
+            sample_proc.wait(timeout=max(1, timeout_seconds))
+            record("sample_exited", exit_code=sample_proc.returncode)
+        except subprocess.TimeoutExpired:
+            sample_proc.terminate()
+            try:
+                sample_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                sample_proc.kill()
+                sample_proc.wait(timeout=5)
+            record("sample_timeout_terminated", exit_code=sample_proc.returncode)
+
+    finally:
+        if procmon_enabled:
+            try:
+                stop_cmd = [tools["procmon"], "/Terminate"]
+                completed = subprocess.run(stop_cmd, capture_output=True, text=True, timeout=30)
+                record(
+                    "procmon_stopped",
+                    after_sample=True,
+                    command=stop_cmd,
+                    exit_code=completed.returncode,
+                    stderr=(completed.stderr or "")[:1000],
+                )
+            except Exception as exc:
+                record("procmon_stop_failed", error=f"{type(exc).__name__}: {exc}")
+
+        if dumpcap_proc is not None:
+            dumpcap_proc.terminate()
+            try:
+                _, stderr = dumpcap_proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                dumpcap_proc.kill()
+                _, stderr = dumpcap_proc.communicate(timeout=10)
+            record(
+                "packet_capture_stopped",
+                after_sample=True,
+                exit_code=dumpcap_proc.returncode,
+                stderr=(stderr or "")[:1000],
+            )
+        write_status("collecting")
+
+    if "tshark" in collectors and availability["tshark"] and network_pcap.exists():
+        tshark_jobs = [
+            ("network_summary.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,ip"]),
+            ("dns.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "dns"]),
+            ("http.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "http"]),
+            ("conversations.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,tcp"]),
+        ]
+        for output_name, command in tshark_jobs:
+            output_path = dynamic_dir / output_name
+            result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            output_path.write_text(
+                (result.stdout or "") + (("\n[stderr]\n" + result.stderr) if result.stderr else ""),
+                encoding="utf-8",
+                errors="replace",
+            )
+            record("pcap_parsed", command=command, output=str(output_path), exit_code=result.returncode)
+
+    state.steps_completed.append("dynamic.collectors")
+    write_status("collected")
+
+
+def _command_available(command: str) -> bool:
+    raw = str(command or "").strip().strip('"')
+    if not raw:
+        return False
+    path = Path(raw)
+    if path.is_file():
+        return True
+    return shutil.which(raw) is not None
 
 
 def run_network_analysis(state: JobState, mode: str = "real") -> None:

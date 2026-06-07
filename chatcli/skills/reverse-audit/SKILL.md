@@ -1,672 +1,275 @@
 ---
 name: reverse-audit
-description: Use this skill when the user asks to audit reverse-engineering work, validate malware-analysis conclusions, review IDA/Ghidra/angr/frida output, check whether behavior claims are supported by evidence, compare static and dynamic findings, or identify missing evidence in a suspicious binary analysis. This skill does not perform primary triage; it reviews and strengthens existing reverse-analysis results by checking evidence quality, confidence, gaps, unsafe assumptions, IOC quality, ATT&CK mappings, and report correctness.
+description: >-
+  Use this skill for authorized defensive reverse engineering and reverse-analysis review:
+  逆向分析, 逆向审计, IDA/Ghidra/angr/frida output review, CTF/crackme/local
+  challenge analysis, validation-logic reconstruction, solver or patch audit for
+  owned/local binaries, malware report evidence validation, ATT&CK/IOC/detection-rule
+  audit, static-vs-dynamic consistency checks, and evidence-backed correction of
+  reverse-engineering conclusions. Prefer malware-triage for first-pass malware
+  behavior triage from only a sample path; use reverse-audit for /reverse tasks,
+  function-level analysis, crackme-style reasoning, patch validation, or auditing
+  existing findings.
 ---
 
 # Reverse Audit Skill
 
-## Primary goal
+Audit and perform authorized reverse analysis with evidence discipline. Use the smallest technique that can prove or disprove the current claim, record durable state, and avoid turning local analysis into real-world offensive capability.
 
-Audit reverse-engineering and malware-analysis conclusions for correctness, evidence quality, and safety.
+## Scope Decision
 
-This skill should answer:
+Use this skill when the task is any of:
 
-1. Which conclusions are well supported?
-2. Which conclusions are overstated?
-3. Which claims need more evidence?
-4. Which tool outputs may be misleading?
-5. Which IOCs are high value versus noisy?
-6. Which ATT&CK mappings are justified?
-7. What safe follow-up analysis should be done?
+- Review or strengthen an existing reverse-engineering or malware-analysis conclusion.
+- Analyze an authorized local binary, CTF/crackme, validation gate, local challenge, patch candidate, or solver target.
+- Interpret IDA, Ghidra, angr, Frida, capa, FLOSS, YARA, sandbox, PCAP, or decompiler output.
+- Validate behavior claims, IOC quality, ATT&CK mappings, static/dynamic consistency, or detection rules.
+- Continue a `/reverse` workflow that needs function-level evidence, obfuscation handling, unpacking plans, or patch audit.
 
-This skill is a review layer. It should not replace `malware-triage` when the user wants a first-pass sample analysis.
+Prefer `malware-triage` when the user only provides a suspicious sample and asks for broad malware behavior triage, IOC extraction, or a final malware report. Hand off back to `malware-triage` when the reverse work has produced enough function-level evidence for behavior reporting.
 
-Use `malware-triage` for primary sample triage.  
-Use `reverse-audit` for validating, correcting, or strengthening an existing analysis.
+## Progressive Reference Loading
 
----
+Read only the reference needed for the current route:
 
-## When to use this skill
+- `references/audit-checklist.md`: use for report review, claim validation, confidence correction, ATT&CK/IOC/detection audit, or static-vs-dynamic consistency.
+- `references/rewrite-templates.md`: use before rewriting overclaimed report language or producing final safer wording.
+- `references/technique-map.md`: use when choosing the next reverse technique from file/code/data/API/packer signals.
+- `references/competition-playbook.md`: use for authorized local CTF/crackme, validation logic, patch audit, solver, anti-debug, anti-VM, custom packer, API hashing, or local instrumentation routes.
+- `references/github-reverse-patterns.md`: use when common routes stall or the sample shows advanced patterns such as custom VM, MBA, TLS init, direct syscall, IAT encryption, layered integrity guards, or runtime-only values.
 
-Use this skill when the user asks:
+Do not load all references by default.
 
-- 帮我审一下这个逆向分析结论
-- 这个恶意行为判断有没有证据
-- 这个报告哪里不严谨
-- 这个 IDA/Ghidra 分析是否可信
-- capa/floss/yara/angr/frida 的输出怎么验证
-- 这个 ATT&CK 映射是否合理
-- IOC 有没有误报风险
-- 哪些行为是 confirmed，哪些只是 guessed
-- 静态分析和动态分析是否矛盾
-- 哪些地方需要补充分析
-- 帮我把报告改得更专业
-- review this malware report
-- audit this reverse engineering result
-- validate these behavior claims
+## Hard Rules
 
----
+1. Tie every conclusion to evidence: source, offset/function/log entry, and confidence.
+2. Separate raw evidence, interpretation, capability, and observed behavior.
+3. Never accept strings, imports, AV labels, capa/YARA matches, or ATT&CK tags as confirmed behavior by themselves.
+4. Downgrade confidence when reachability, xrefs, API arguments, data flow, or runtime observation are missing.
+5. Do not execute unknown samples on the analyst host. Treat dynamic work as sandbox/remote/local-lab only and only when explicitly in scope.
+6. For CTF/crackme/local owned binaries, keep patching, hooking, solvers, and instrumentation scoped to the provided artifact.
+7. Do not provide persistence, stealth, EDR/AV bypass, credential theft, live C2 operation, destructive behavior, piracy, unauthorized access, or real third-party exploitation guidance.
+8. Prefer defensive next steps: validation, containment, hunting, detection, remediation, and safe lab plans.
 
-## Difference from malware-triage
-
-| Skill            | Purpose                                                      |
-| ---------------- | ------------------------------------------------------------ |
-| `malware-triage` | Analyze a suspicious sample and produce behavior findings    |
-| `reverse-audit`  | Review existing findings and check whether they are evidence-backed |
-
-If the user provides only a sample path and asks for analysis, use `malware-triage`.
-
-If the user provides analysis results, tool output, report text, behavior claims, or reverse notes and asks whether they are correct, use `reverse-audit`.
-
----
-
-## Hard rules
-
-1. Never accept a behavior claim only because a tool reported it.
-2. Separate raw evidence, analyst interpretation, and unsupported speculation.
-3. Downgrade confidence when code reachability, runtime observation, or data flow is missing.
-4. Do not treat strings alone as confirmed behavior.
-5. Do not treat imports alone as confirmed behavior.
-6. Do not treat ATT&CK mappings as valid unless behavior evidence exists.
-7. Do not recommend blind blocking of shared infrastructure.
-8. Do not give instructions that improve malware persistence, stealth, evasion, credential theft, exfiltration, or destructive capability.
-9. If evidence is insufficient, say so directly.
-10. Prefer defensive next steps.
-
----
-
-## Input types
-
-The user may provide:
-
-- Malware report text
-- Tool output
-- IDA notes
-- Ghidra decompiler output
-- capa results
-- FLOSS string output
-- YARA match output
-- Sandbox logs
-- PCAP summary
-- IOC list
-- ATT&CK mapping table
-- Decompiled functions
-- Disassembly snippets
-- Behavior claim table
-- A path to existing analysis files
-
-Accept partial input. Do not require a perfect report.
-
----
-
-## Default audit workflow
-
-### Phase 1: Identify claims
-
-Extract explicit and implicit claims from the provided material.
-
-Claims may include:
-
-- The sample is malware.
-- The sample is packed.
-- The sample is a loader.
-- The sample contacts C2.
-- The sample persists.
-- The sample injects into another process.
-- The sample steals credentials.
-- The sample encrypts files.
-- The sample exfiltrates data.
-- The sample evades analysis.
-- The sample belongs to a malware family.
-- The sample maps to a specific ATT&CK technique.
-- An IOC should be blocked.
-
-For each claim, identify:
-
-- Claim text
-- Claimed behavior
-- Evidence cited by the original analysis
-- Evidence actually present
-- Confidence level
-- Missing proof
-
----
-
-### Phase 2: Classify evidence
-
-Classify each evidence item as one of:
-
-| Evidence type       | Meaning                                           |
-| ------------------- | ------------------------------------------------- |
-| dynamic_observation | Runtime telemetry observed behavior               |
-| decompiled_logic    | Decompiled code supports behavior                 |
-| disassembly         | Instruction-level support                         |
-| api_cluster         | API sequence supports capability                  |
-| string_xref         | String is referenced by relevant code             |
-| string_only         | String exists but usage is unknown                |
-| import_only         | Import exists but usage is unknown                |
-| config              | Extracted configuration                           |
-| network_log         | DNS, HTTP, TLS, socket, or PCAP evidence          |
-| file_event          | Runtime or static file artifact                   |
-| registry_event      | Runtime or static registry artifact               |
-| heuristic           | Tool inference without direct supporting evidence |
-| analyst_inference   | Analyst interpretation                            |
-| unsupported         | No evidence found                                 |
-
-Prefer stronger evidence.
-
-Evidence strength order:
-
-1. Dynamic observation
-2. Reachable decompiled logic
-3. Disassembly with clear call/data flow
-4. API cluster in same function or reachable path
-5. String with relevant xref
-6. Extracted config
-7. Tool heuristic with supporting details
-8. String only
-9. Import only
-10. Unsupported assertion
-
----
-
-### Phase 3: Assign confidence
-
-Use these confidence levels:
-
-| Confidence   | Meaning                                                |
-| ------------ | ------------------------------------------------------ |
-| confirmed    | Behavior was observed dynamically or directly proven   |
-| high         | Strong static evidence with clear code relationship    |
-| medium       | Plausible evidence but incomplete proof                |
-| low          | Weak evidence such as isolated string/import/heuristic |
-| unsupported  | No adequate evidence                                   |
-| contradicted | Evidence conflicts with the claim                      |
-
-Do not use `confirmed` for static-only evidence unless the code path and data flow are directly proven.
-
----
-
-### Phase 4: Detect overclaiming
-
-Flag overclaiming patterns.
-
-| Overclaim                                          | Safer wording                                                |
-| -------------------------------------------------- | ------------------------------------------------------------ |
-| "This is a stealer" from browser path strings only | "The sample contains possible credential-access indicators"  |
-| "This contacts C2" from URL string only            | "The sample contains a possible C2 URL, but runtime communication is unconfirmed" |
-| "This is ransomware" from crypto imports only      | "The sample imports crypto APIs; ransomware behavior is not proven" |
-| "This injects code" from `VirtualAlloc` only       | "The sample may allocate executable memory; injection is not proven" |
-| "This persists" from Run key string only           | "Possible persistence indicator; no registry write confirmed" |
-| "This evades EDR" from obfuscation only            | "The sample contains obfuscation or defense-evasion indicators" |
-| "This belongs to family X" from one string         | "Family attribution is insufficiently supported"             |
-
-When overclaiming is found, provide corrected wording.
-
----
-
-### Phase 5: Validate ATT&CK mapping
-
-For each ATT&CK mapping, check:
-
-- Is the mapped behavior actually present?
-- Is the evidence strong enough?
-- Is the technique too broad?
-- Is a more specific technique appropriate?
-- Is the mapping based only on a tool heuristic?
-- Does the report confuse capability with execution?
-
-Use this table:
-
-| ATT&CK 技术 | 原始映射 | 证据 | 审计结果 | 建议 |
-| ----------- | -------- | ---- | -------- | ---- |
-
-Audit result values:
-
-- valid
-- valid_but_lower_confidence
-- too_broad
-- weak_evidence
-- unsupported
-- wrong_mapping
-
-If evidence is weak, write:
-
-> 当前证据不足以支持该 ATT&CK 映射。
-
----
-
-### Phase 6: Validate IOC quality
-
-For each IOC, classify:
-
-| IOC value            | Meaning                                                      |
-| -------------------- | ------------------------------------------------------------ |
-| high_value           | Unique or strongly tied to malicious behavior                |
-| medium_value         | Useful but not fully confirmed or not unique                 |
-| low_value            | Noisy, generic, local, or weak                               |
-| do_not_block_blindly | Shared, public, cloud, CDN, resolver, localhost, private, or risky to block |
-
-Check for:
-
-- Public DNS resolvers
-- CDNs
-- Cloud provider infrastructure
-- GitHub, Microsoft, Google, Cloudflare, AWS, Azure, or similar shared platforms
-- RFC1918 private IPs
-- Localhost
-- Sandbox artifacts
-- Sinkholes
-- Generic filenames
-- Generic registry paths
-- Common user agents
-- Analyst machine paths
-- Victim-specific internal hostnames
-
-Do not recommend blocking shared infrastructure unless the report has strong context and risk acceptance.
-
-Use this table:
-
-| IOC  | 类型 | 原始建议 | 质量评级 | 审计意见 |
-| ---- | ---- | -------- | -------- | -------- |
-
----
-
-### Phase 7: Check static versus dynamic consistency
-
-If both static and dynamic evidence are provided, compare them.
-
-Look for:
-
-- Static C2 string but no dynamic network
-- Dynamic network to endpoint not found in static strings
-- Static persistence code but no runtime registry write
-- Dynamic child process not explained by static code
-- Static injection APIs but no injection telemetry
-- Sandbox exits early due to anti-analysis
-- Dynamic behavior depends on command-line arguments
-- Missing trigger condition
-- Packed outer loader hides payload behavior
-
-Use this table:
-
-| 项目 | 静态证据 | 动态证据 | 是否一致 | 解释 |
-| ---- | -------- | -------- | -------- | ---- |
-
-Consistency values:
-
-- consistent
-- partially_consistent
-- inconsistent
-- not_observed
-- insufficient_data
-
-Do not treat absent dynamic behavior as proof of absence.
-
----
-
-### Phase 8: Identify missing evidence
-
-Common missing evidence:
-
-- Function reachability not proven
-- String xref missing
-- API call site not reviewed
-- Data flow not traced
-- Dynamic execution not performed
-- Sandbox did not trigger payload
-- Network unavailable or sinkholed
-- Packed payload not recovered
-- Dropped files not collected
-- Memory dump missing
-- Child payload not separately analyzed
-- Config not decoded
-- ATT&CK mapping too generic
-- IOC not quality-scored
-- Report does not separate static and dynamic evidence
-
-Output missing evidence clearly.
-
----
-
-## Recommended tool usage
-
-Use available ChatCLI tools only when needed.
-
-### For report or claim audit
-
-Recommended tools:
-
-- `behavior_validator`
-- `behavior_confidence`
-- `behavior_requirements`
-- `behavior_taxonomy`
-- `evidence_graph`
-- `attack_chain`
-- `attack_technique`
-- `ioc_quality`
-
-### For validating static evidence
-
-Recommended tools:
-
-- `binary_inspect`
-- `external_static`
-- `reverse_text`
-- `data_obfuscation`
-- `behavior_capability`
-- `command_capability`
-- `ida`
-- `ghidra`
-- `angr_triage`
-
-### For validating dynamic evidence
-
-Only if dynamic logs or sandbox results are already available, or user approved dynamic analysis:
-
-- `remote_consume`
-- `remote_watch`
-- `remote_vm`
-- `ioc_quality`
-- `evidence_graph`
-
-Do not execute a sample merely to audit a report unless the user explicitly requests dynamic validation and a safe isolated environment is available.
-
----
-
-## Output format
-
-Use Chinese when the user writes Chinese.
-
-Default final structure:
-
-1. **审计结论**
-2. **主要问题**
-3. **逐条行为审计**
-4. **证据强度评估**
-5. **IOC 审计**
-6. **ATT&CK 映射审计**
-7. **静态 / 动态一致性**
-8. **缺失证据**
-9. **建议修改后的报告表述**
-10. **下一步安全验证建议**
-
----
-
-## Required tables
-
-### Behavior audit table
-
-| 原始结论 | 证据 | 审计结果 | 建议置信度 | 建议改写 |
-| -------- | ---- | -------- | ---------- | -------- |
-|          |      |          |            |          |
-
-Audit result values:
-
-- supported
-- partially_supported
-- overstated
-- unsupported
-- contradicted
-- needs_more_evidence
-
----
-
-### Evidence quality table
-
-| 证据 | 类型 | 强度 | 支持的结论 | 问题 |
-| ---- | ---- | ---- | ---------- | ---- |
-|      |      |      |            |      |
-
-Strength values:
-
-- strong
-- moderate
-- weak
-- misleading
-- irrelevant
-
----
-
-### IOC audit table
-
-| IOC  | 类型 | 价值 | 风险 | 建议 |
-| ---- | ---- | ---- | ---- | ---- |
-|      |      |      |      |      |
-
----
-
-### Gap table
-
-| 缺口 | 影响 | 建议补充分析 |
-| ---- | ---- | ------------ |
-|      |      |              |
-
----
-
-## Corrective language examples
-
-Use these rewrites when the original report overstates evidence.
-
-### C2
-
-Original:
-
-> 样本连接 C2。
-
-Rewrite if only URL string exists:
-
-> 样本包含疑似 C2 URL 字符串，但当前证据仅证明该字符串存在，尚未确认其被网络 API 使用或在运行时连接。
-
-Rewrite if URL is passed to network API:
-
-> 静态证据高置信度支持样本构造到该 URL 的网络请求，但尚未通过动态流量确认实际连接。
-
-Rewrite if PCAP confirms connection:
-
-> 动态分析确认样本向该 endpoint 发起网络请求。
-
----
-
-### Persistence
-
-Original:
-
-> 样本会持久化。
-
-Rewrite if only Run key string exists:
-
-> 样本包含 Run key 路径字符串，提示可能存在持久化逻辑，但尚未确认写注册表 API 或运行时写入事件。
-
-Rewrite if write API and xref exist:
-
-> 静态证据高置信度支持样本通过 Run key 实现登录持久化。
-
-Rewrite if sandbox confirms write:
-
-> 动态分析确认样本写入 Run key，实现登录持久化。
-
----
-
-### Credential access
-
-Original:
-
-> 样本窃取浏览器密码。
-
-Rewrite if only paths exist:
-
-> 样本包含浏览器凭据数据库路径，提示可能针对凭据存储，但尚未确认文件读取、DPAPI 解密或外传逻辑。
-
-Rewrite if path plus SQLite and DPAPI logic exist:
-
-> 静态证据高置信度支持样本尝试访问浏览器凭据数据库并调用 DPAPI 相关逻辑。
-
-Rewrite if dynamic file read is observed:
-
-> 动态分析确认样本访问浏览器凭据数据库。是否成功解密或外传仍需结合后续证据判断。
-
----
-
-### Injection
-
-Original:
-
-> 样本进程注入。
-
-Rewrite if only one API exists:
-
-> 样本包含注入相关 API，但单个 API 不足以证明进程注入。
-
-Rewrite if API cluster exists:
-
-> 静态证据高置信度支持远程线程注入行为，因为相关 API 组合出现在同一可疑流程中。
-
-Rewrite if dynamic telemetry confirms:
-
-> 动态分析确认样本向目标进程写入内存并创建远程线程。
-
----
-
-### Ransomware
-
-Original:
-
-> 样本是勒索病毒。
-
-Rewrite if only crypto imports exist:
-
-> 样本导入加密相关 API，但未发现文件遍历、文件重写、勒索说明或备份删除逻辑，因此不足以证明勒索行为。
-
-Rewrite if encryption workflow exists:
-
-> 静态证据支持 ransomware-like 文件加密逻辑，但尚未通过动态分析确认实际加密文件。
-
-Rewrite if dynamic encryption observed:
-
-> 动态分析确认样本加密文件并生成勒索说明。
-
----
-
-## Family attribution audit
-
-Family attribution requires stronger evidence than behavior mapping.
-
-Do not accept family attribution based only on:
-
-- One string
-- One domain
-- Similar filename
-- Similar packer
-- Similar import table
-- Generic capability overlap
-- AV label
-
-Better evidence includes:
-
-- Shared config format
-- Shared protocol
-- Shared encryption routine
-- Shared unique mutex or campaign structure
-- Shared code structure
-- Shared builder artifact
-- Multiple independent intelligence sources
-- High-confidence YARA family rule with unique logic
-
-Use this wording when evidence is weak:
-
-> 当前证据不足以确认样本属于该家族。更稳妥的表述是：该样本与该家族在若干行为或配置特征上相似。
-
----
-
-## Detection rule audit
-
-When reviewing YARA, Sigma, Suricata, EDR, or SIEM rules, check:
-
-1. Does the rule match evidence-backed behavior?
-2. Are strings unique enough?
-3. Does the condition require multiple indicators?
-4. Are generic library strings excluded?
-5. Is file type constrained when appropriate?
-6. Are false positives discussed?
-7. Is shared infrastructure avoided?
-8. Are hashes used only when hash-only hunting is intended?
-9. Is the rule syntactically valid?
-10. Does the rule align with available telemetry?
-
-Use `detection_lint` if available.
-
-Output:
-
-| 规则 | 问题 | 风险 | 建议修改 |
-| ---- | ---- | ---- | -------- |
-|      |      |      |          |
-
----
-
-## Safety boundaries
-
-This skill may discuss:
-
-- Whether evasion exists
-- Whether persistence exists
-- Whether credential targeting exists
-- Whether exfiltration exists
-- Whether destructive behavior exists
-- How to detect or contain these behaviors
-
-This skill must not help:
-
-- Improve evasion
-- Improve persistence
-- Improve credential theft
-- Improve exfiltration
-- Improve destructive behavior
-- Operate C2
-- Deploy malware
-- Bypass EDR or AV in real environments
-
-If the user asks for unsafe changes, say:
+If the user asks for unsafe improvement, say:
 
 > 我不能帮助增强恶意样本的隐蔽性、持久化、绕过、窃密或破坏能力。但我可以帮你审计它当前是否具备这些能力、指出证据强弱，并生成防御检测建议。
 
----
+## State And Work Management
 
-## Minimum final answer standard
+For `/reverse` or long-running work:
 
-Every reverse audit answer must include:
+1. Read `.chatcli/task.md` first.
+2. If it contains `## Reverse Analysis State`, treat it as the source of truth.
+3. Update the state after meaningful phases with analyzed functions, verified evidence, solver notes, patch offsets, blockers, and child summaries.
+4. Do not repeat completed `[x]` entries unless new evidence invalidates them.
+5. For large IDA/Ghidra/function work, delegate focused child tasks and keep the main context to decisions, evidence maps, and summaries.
+6. Do not claim completion while required child findings are still pending unless they are explicitly non-blocking.
 
-- Overall audit conclusion
-- At least one behavior audit table
-- Evidence quality discussion
-- Confidence corrections
-- Missing evidence
-- Safer rewritten claims
-- Defensive next steps
+Use this compact state shape when creating or repairing state:
 
-If the provided material is too limited, say:
+```markdown
+## Reverse Analysis State
 
-> 当前材料不足以完成完整审计。
+### Scope
+- Target:
+- Authorized boundary:
+- Dynamic execution:
 
-Then still provide:
+### Completed Phases
+- [ ] Identity and static triage
+- [ ] Candidate function map
+- [ ] Focused function analysis
+- [ ] Claim/confidence audit
+- [ ] Patch/solver verification
 
-- What can be checked
-- What cannot be checked
-- What evidence is missing
-- What the user should provide next
+### Verified Evidence
+- source:
+- offset/function:
+- evidence:
+- supports:
+- confidence:
 
----
+### Analyzed Functions
+- [ ] address/name:
+  role:
+  evidence:
+  conclusion:
+  next:
 
-## Final checklist
+### Open Questions
+- 
+```
 
-Before answering, verify:
+## Default Workflow
 
-- Did I distinguish evidence from interpretation?
-- Did I downgrade unsupported claims?
-- Did I avoid accepting tool output blindly?
-- Did I check IOC quality?
-- Did I check ATT&CK mapping quality?
-- Did I identify missing evidence?
-- Did I provide safer rewritten wording?
-- Did I avoid unsafe malware-improvement guidance?
-- Did I provide defensive next steps?
+### 1. Classify The Task
+
+Decide the route before tool use:
+
+| Route | Use when | First reference |
+| --- | --- | --- |
+| Claim/report audit | User gives conclusions, report, IOC list, ATT&CK table, tool output | `audit-checklist.md` |
+| Local reverse analysis | User gives binary/function/path and asks how it works | `technique-map.md` |
+| CTF/crackme/solver | User asks for flag, password, validation logic, local patch, or challenge solve | `competition-playbook.md` |
+| Patch audit | User asks whether bytes/branches/offsets are safe to patch | `competition-playbook.md` |
+| Advanced blocker | Packing, custom VM, SMC, API hashing, direct syscall, MBA, integrity guard | `github-reverse-patterns.md` |
+
+If the route is ambiguous, start with static identity and evidence mapping. Ask for scope only when authorization, dynamic execution, or target boundaries are materially unclear.
+
+### 2. Collect Fast Evidence
+
+Start with lightweight static evidence before deep decompilation:
+
+- File identity: path, SHA256 when available, size, format, architecture, entry point.
+- Sections, entropy, imports, resources, overlays, TLS/delayed-import clues.
+- Strings and encoded strings; always check xrefs before treating them as behavior.
+- Packer/protector signs.
+- Candidate functions from entry order, xrefs, imports, strings, or existing IDA/Ghidra JSON.
+
+Use broad tools only once per artifact unless the previous output is stale or empty. Prefer focused follow-up tools over repeating broad IDA/Ghidra passes.
+
+### 3. Build The Evidence Queue
+
+Normalize findings into claims or work items:
+
+- claim or question
+- evidence source
+- offset/function/log
+- evidence type
+- missing proof
+- next smallest technique
+
+Evidence types:
+
+```text
+dynamic_observation, decompiled_logic, disassembly, api_cluster, string_xref,
+string_only, import_only, config, network_log, file_event, registry_event,
+heuristic, analyst_inference, unsupported
+```
+
+Confidence levels:
+
+```text
+confirmed, high, medium, low, unsupported, contradicted
+```
+
+Use `confirmed` only for dynamic observation or directly proven execution/data flow. Static-only evidence is usually `high` at best.
+
+### 4. Choose The Next Technique
+
+Pick the smallest action that can change confidence:
+
+- Need xref? Inspect string/import xrefs.
+- Need arguments? Focused decompile or disassembly at the call site.
+- Need reachability? Trace caller chain from entry or observed function.
+- Need local validation? Reconstruct a bounded scratch solver.
+- Need patch audit? Verify exact offset, original bytes, branch semantics, integrity guard risk, and rollback.
+- Need unpacking? Map loader/decrypt/OEP first; do not trust packed pseudocode.
+- Need runtime-only values? Provide a local-lab hook/dump plan unless execution is explicitly in scope.
+
+### 5. Validate Or Correct Claims
+
+For each claim, decide:
+
+```text
+supported, partially_supported, overstated, unsupported, contradicted,
+needs_more_evidence
+```
+
+Common downgrades:
+
+- URL string only -> possible endpoint, not confirmed C2.
+- Run key string only -> possible persistence, not confirmed persistence.
+- Browser path only -> possible credential-access targeting, not confirmed theft.
+- `VirtualAlloc` only -> memory allocation, not process injection.
+- Crypto imports only -> crypto capability, not ransomware.
+- AV/family label only -> weak attribution, not family confirmation.
+
+### 6. Produce A Task-Fit Output
+
+Use Chinese when the user writes Chinese.
+
+For report/claim audit, include:
+
+- **审计结论**
+- **主要问题**
+- **逐条行为审计**
+- **证据质量评估**
+- **IOC 审计** when IOCs exist
+- **ATT&CK 映射审计** when mappings exist
+- **检测规则审计** when rules exist
+- **静态 / 动态一致性** when both evidence types exist
+- **缺失证据**
+- **建议改写**
+- **安全补充分析建议**
+
+For local reverse/CTF/crackme work, include:
+
+- target identity
+- fast-path decision
+- key functions/offsets
+- validation logic or behavior reconstruction
+- solver/patch plan only when evidence supports it
+- exact offsets/bytes and rollback for patch audit
+- verification status and blockers
+
+## Required Tables When Applicable
+
+Behavior audit:
+
+| 原始结论 | 证据 | 审计结果 | 建议置信度 | 建议改写 |
+| --- | --- | --- | --- | --- |
+
+Evidence quality:
+
+| 证据 | 类型 | 强度 | 支持的结论 | 问题 |
+| --- | --- | --- | --- | --- |
+
+IOC audit:
+
+| IOC | 类型 | 价值 | 风险 | 建议 |
+| --- | --- | --- | --- | --- |
+
+ATT&CK audit:
+
+| ATT&CK 技术 | 原始映射 | 证据 | 审计结果 | 建议 |
+| --- | --- | --- | --- | --- |
+
+Patch audit:
+
+| 位置 | 原始字节 | 建议字节 | 语义 | 风险 | 回滚 |
+| --- | --- | --- | --- | --- | --- |
+
+Gap table:
+
+| 缺口 | 影响 | 建议补充分析 |
+| --- | --- | --- |
+
+## Tool Preferences
+
+Use ChatCLI tools when available:
+
+- Identity/static triage: `binary_inspect`, `external_static`, `reverse_text`.
+- Search/verification: `binary_search`, `binary_formats`, focused `read`.
+- Obfuscation/data: `data_obfuscation`, `encoded_strings`, reverse data tools.
+- IDA/Ghidra: `ida`, `ida_focus`, `ida_script`, `ghidra`, `angr_triage`.
+- Claim validation: `behavior_validator`, `behavior_confidence`, `behavior_requirements`, `evidence_graph`, `attack_chain`, `attack_technique`.
+- IOC/rule quality: `ioc_quality`, `detection_lint`.
+- Patching: `binary_patch` only for authorized local copied artifacts with verified old bytes.
+
+If a tool output is unavailable or inconclusive, continue with the next best evidence and state the limitation.
+
+## Completion Checklist
+
+Before finalizing, verify:
+
+- Evidence and interpretation are separated.
+- Unsupported or overbroad claims are downgraded.
+- Strings/imports/tool labels are not treated as confirmed behavior.
+- Function reachability, xrefs, arguments, and data flow are addressed where relevant.
+- IOC quality and shared-infrastructure risk are checked when IOCs exist.
+- ATT&CK mappings are tied to behavior evidence when mappings exist.
+- Patch/solver claims include exact evidence and verification status.
+- Missing evidence and safe next steps are explicit.
+- Unsafe malware-improvement or unauthorized-access guidance is excluded.

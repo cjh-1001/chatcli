@@ -306,6 +306,16 @@ The user's request follows below.
         if not text or text == "[no text response]":
             return True
 
+        # Work-mode pause markers are intentionally short and may occur
+        # before any tool use. Do not auto-retry them into more exploration.
+        upper_text = text.upper()
+        if (
+            "USER CHOICE REQUIRED" in upper_text
+            or "PLAN READY" in upper_text
+            or "TASK COMPLETE" in upper_text
+        ):
+            return False
+
         # Response contains unparsed tool call fragments — the model tried
         # to use tools but the format was malformed (e.g. XML attribute style
         # instead of JSON). Tell it to use the correct format.
@@ -599,6 +609,19 @@ The user's request follows below.
                 text = response.text.strip() if response.text else ""
                 if not text:
                     text = "[no text response]"
+
+                # Work-mode pause markers must return control to the REPL
+                # immediately. The minimum-tool guard below is for analysis
+                # answers, not user-choice prompts.
+                upper_text = text.upper()
+                if (
+                    "USER CHOICE REQUIRED" in upper_text
+                    or "PLAN READY" in upper_text
+                    or "TASK COMPLETE" in upper_text
+                ):
+                    self._history.append({"role": "assistant", "content": text})
+                    self._auto_save()
+                    return text, False
 
                 # Guard: if too few tools used, push for more exploration.
                 # Allow up to 2 consecutive "no" answers before accepting

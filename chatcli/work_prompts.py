@@ -161,8 +161,10 @@ sandbox planning is relevant.
    with that requested workflow without asking again. If the user explicitly
    says static-only/no execution/no dynamic analysis, do static analysis only.
    If the user has not stated whether dynamic analysis is needed, ask once
-   whether to include dynamic analysis; if not included, treat the task as
-   static analysis only.
+   whether to include dynamic analysis and stop before sample triage until the
+   user answers. This is an exception to autonomous work mode. Use this exact
+   one-line format in Chinese when appropriate:
+   `USER CHOICE REQUIRED: 是否需要包含动态分析？如果需要，请指定隔离环境（VM/沙箱/远程一次性环境）和回滚方式（快照/销毁重建/还原点）；我不会在宿主机执行样本。如果不需要，我将按静态分析处理。`
 2. First record identity and scope: target path, size, hashes, file type,
    architecture, sections/resources, timestamps, packer clues, and installed
    external analyzers.
@@ -174,7 +176,15 @@ sandbox planning is relevant.
    `chatcli/skills/tencent-remote-analysis/SKILL.md` and only the needed
    reference file under `chatcli/skills/tencent-remote-analysis/references/`.
    Use `remote_guest health/tools/prepare/run/status/download`. Do not use
-   local `/tools check` to judge server-side tools.
+   local `/tools check` to judge server-side tools. If the remote workflow
+   includes dynamic analysis, download all results first, then restore the
+   Tencent Cloud server to `remote.tencent_snapshot_id` with
+   `remote_vm_control stop` and `remote_vm_control restore_snapshot`; verify
+   status before saying `TASK COMPLETE`. After downloading dynamic results,
+   treat them as a second-pass validation layer over the existing static
+   analysis: revise the original behavior chain, capability confidence, IOC
+   value, and gaps in place. Do not leave dynamic analysis as a standalone
+   process appendix.
 4. Extract defensive evidence:
    - network IOCs such as domains, URLs, IPs, ports, user agents, protocol
      markers, and C2-like paths,
@@ -214,7 +224,10 @@ sandbox planning is relevant.
    blockers, and next static steps.
 10. When complete, output a structured report that covers ALL of these sections
    in Simplified Chinese (keep technical terms like SHA256, IOC, YARA, Sigma,
-   C2, PE, ELF, API, ATT&CK in standard form):
+   C2, PE, ELF, API, ATT&CK in standard form). The final HTML's visible
+   headings and narrative must be Chinese; English is allowed only for tool
+   names, file names, API names, command names, rule formats, and technical
+   identifiers:
    - **样本结论**: verdict, confidence, family, one-line impact summary
    - **样本身份**: path, SHA256, MD5, file type, architecture, size, compile
      time, sections, entropy, packer status
@@ -222,6 +235,15 @@ sandbox planning is relevant.
      target/asset → impact → confidence → gaps for each step
    - **关键能力分析**: persistence, C2, injection, credential access, defense
      evasion, lateral movement, destructive behavior, security tool tampering
+   - **静态-动态验证矩阵**: for each important static hypothesis, mark
+     confirmed / refuted / unobserved / inconclusive, cite dynamic artifacts,
+     and state exactly how the final report was changed
+   - **动态分析证据**: execution facts, process/file/registry/network/memory
+     observations, and downloaded artifact file names; include only actual
+     dynamic artifacts, not expectations
+   - **证据链总表**: each major conclusion mapped to static evidence,
+     dynamic evidence, source artifacts, analyst interpretation, confidence,
+     and remaining gaps
    - **行为覆盖清单**: confirmed / likely / not observed / not analyzed per
      major attack family
    - **IOC 清单**: network IOCs, host IOCs, crypto/config IOCs, low-confidence
@@ -245,19 +267,32 @@ sandbox planning is relevant.
       `python -m chatcli.templates.malware_report <json_path> <sample_dir>/<sample_stem>_triage_report.html`
       Naming example: `C:\samples\1_triage_report.html` for `C:\samples\1.exe`.
    c. If the JSON schema validation fails, fix the JSON and retry.
+      If dynamic analysis was performed, the JSON MUST include
+      `dynamic_validation`, `dynamic_evidence`, and `evidence_chain`; the HTML
+      title must be `恶意样本分析报告` or equivalent, not
+      `恶意样本静态分析报告`.
    d. If the template renderer is unavailable, fall back to writing a
       self-contained HTML file alongside the sample using `write_file`.
       Include `<meta charset="utf-8">` and make it self-contained.
    The template provides rich styling (dark/light mode, collapsible sections,
    badges, card layout), so the JSON pipeline is strongly preferred.
    **Output the report alongside the sample file, NOT under `.chatcli/reports/`.**
+   A quality gate checklist, task-complete note, or tool execution summary is
+   only a process report. It is not a final report unless the HTML contains the
+   conclusion, identity, attack chain, capabilities, IOC, impact, detection,
+   limitations, evidence chain, and, when applicable, dynamic validation
+   sections. Do not use English headings such as `Quality Gate Checklist`,
+   `TASK COMPLETE`, or `Final deliverables` as final report sections.
 13. **Iterative refinement**: do NOT produce a final report in your first
    response. Work in rounds — each round extracts one category of evidence
    (identity → strings → IOCs → config → capabilities → detection), reviews
    the cumulative findings, and only then decides whether to extract more or
    produce the report. You will be given a self-review round before completion
    to catch gaps. Keep going until every feasible static extraction has been
-   attempted and all claims are backed by concrete evidence.
+   attempted and all claims are backed by concrete evidence. At the end of a
+   round, if more analysis remains, say `PHASE COMPLETE` with the next concrete
+   step and stop. Say `TASK COMPLETE` only when the final report is genuinely
+   complete.
 14. **Tool efficiency (speed)**:
    - Prefer lightweight tools first: `binary_inspect` → `encoded_string_extract` →
      `external_static_analyze` → `behavior_capability_map`. Only use `ida_analyze`
@@ -316,6 +351,9 @@ Pick ONE concrete next action from this priority queue:
    or `ioc_quality_classifier` to check existing findings.
 4. **Detect** (if validation done): draft YARA/Sigma rules, run `detection_rule_lint`.
 5. **Report** (only if ALL above are complete): produce final report + TASK COMPLETE.
+
+After completing one concrete action, say `PHASE COMPLETE` if more work remains.
+Say `TASK COMPLETE` only when the final report is complete.
 
 **Speed rules**: do not re-run tools whose output is already in context. Read child
 records first if children have completed. If a slow tool is running in a child,

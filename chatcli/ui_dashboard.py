@@ -66,6 +66,7 @@ class Dashboard:
         )
         layout["body"].split_column(
             Layout(name="remote", ratio=1),
+            Layout(name="monitor", ratio=2),
             Layout(name="children", ratio=2),
         )
 
@@ -75,6 +76,7 @@ class Dashboard:
                 while self._running:
                     layout["header"].update(self._render_header())
                     layout["remote"].update(self._render_remote())
+                    layout["monitor"].update(self._render_monitor())
                     layout["children"].update(self._render_children())
                     time.sleep(self.refresh_seconds)
         except KeyboardInterrupt:
@@ -118,6 +120,40 @@ class Dashboard:
         ))
 
         return Panel(table, title="Remote Server", border_style="blue")
+
+    def _render_monitor(self) -> Panel:
+        try:
+            data = self._remote_fn()
+        except Exception:
+            data = {}
+
+        monitor = data.get("monitor", {})
+        agents = monitor.get("observer_agents", [])
+        traffic = monitor.get("traffic_capture", {})
+        dynamic_status = monitor.get("dynamic_status", {})
+
+        table = Table(title="Remote Telemetry", box=box.SIMPLE)
+        table.add_column("Observer", style="cyan", no_wrap=True)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Summary")
+
+        if not monitor:
+            table.add_row("monitor", "unavailable", "Guest Agent monitor endpoint did not return data")
+        else:
+            table.add_row(
+                "dynamic",
+                dynamic_status.get("status", "none"),
+                f"pcap={traffic.get('pcap_bytes', 0)} bytes; files={len(monitor.get('file_activity', []))}",
+            )
+            for agent in agents:
+                status = agent.get("status", "?")
+                table.add_row(
+                    agent.get("name", "?"),
+                    f"{_status_icon(status)} {status}",
+                    _safe_str(agent.get("summary", ""), 90),
+                )
+
+        return Panel(table, title="Telemetry", border_style="yellow")
 
     def _render_children(self) -> Panel:
         try:
@@ -179,10 +215,17 @@ def build_dashboard_callbacks(
                     timeout=5,
                 )
                 cases = r2.json().get("cases", []) if r2.status_code == 200 else []
+                r3 = httpx.get(
+                    f"{remote_base_url}/api/v1/monitor/snapshot",
+                    headers={"Authorization": f"Bearer {remote_token}"},
+                    timeout=8,
+                )
+                monitor = r3.json() if r3.status_code == 200 else {}
             else:
                 cases = []
+                monitor = {}
 
-            return {"health": health, "cases": cases}
+            return {"health": health, "cases": cases, "monitor": monitor}
         except Exception as exc:
             return {"health": {"status": f"error: {exc}"}}
 
