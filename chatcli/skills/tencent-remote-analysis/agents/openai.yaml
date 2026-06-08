@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tencent Remote Analysis"
+  short_description: "Run authorized Guest Agent malware analysis"
+  default_prompt: "Use $tencent-remote-analysis to plan and manage authorized Tencent Cloud Guest Agent static, dynamic, or batch analysis."

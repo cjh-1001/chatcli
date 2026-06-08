@@ -5,6 +5,22 @@ from __future__ import annotations
 from .base import Tool, ToolResult
 
 
+STDOUT_CONTENT_LIMIT = 60000
+STDERR_CONTENT_LIMIT = 12000
+
+
+def _truncate_text(value: str, limit: int) -> tuple[str, bool, int]:
+    text = "" if value is None else str(value)
+    size = len(text)
+    if size <= limit:
+        return text, False, size
+    return (
+        text[:limit] + f"\n[TRUNCATED: remote output was {size} chars, showing first {limit}]",
+        True,
+        size,
+    )
+
+
 class RemoteExecTool(Tool):
     """Execute a command on the remote analysis server via SSH."""
 
@@ -75,9 +91,12 @@ class RemoteExecTool(Tool):
         finally:
             client.close()
 
-        output = stdout
-        if stderr:
-            output += f"\n[stderr]\n{stderr}"
+        safe_stdout, stdout_truncated, stdout_chars = _truncate_text(stdout, STDOUT_CONTENT_LIMIT)
+        safe_stderr, stderr_truncated, stderr_chars = _truncate_text(stderr, STDERR_CONTENT_LIMIT)
+
+        output = safe_stdout
+        if safe_stderr:
+            output += f"\n[stderr]\n{safe_stderr}"
         if exit_code != 0:
             output = f"[exit_code={exit_code}]\n{output}"
 
@@ -86,5 +105,11 @@ class RemoteExecTool(Tool):
             is_error=exit_code != 0,
             metadata={
                 "exit_code": exit_code,
+                "stdout": safe_stdout,
+                "stderr": safe_stderr,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
+                "stdout_chars": stdout_chars,
+                "stderr_chars": stderr_chars,
             },
         )

@@ -256,27 +256,33 @@ sandbox planning is relevant.
 11. Final malware triage reports must be written in Simplified Chinese.
 12. Before saying `TASK COMPLETE`, generate the HTML report using the structured
    template pipeline:
-   a. First, write the report as a JSON file conforming to the schema in
+   a. If the user explicitly requested an HTML output path, preserve that exact
+      path as the final HTML destination. Do not replace it with the default
+      sample-directory filename.
+   b. First, write the report as a JSON file conforming to the schema in
       `chatcli/templates/malware_report.py` (see its docstring for the full
       schema with Chinese field names). Save the JSON alongside the sample file
       as `{sample_stem}_triage_report.json` (e.g. `1_triage_report.json` in the
       same directory as `1.exe`). If the sample directory is unknown, use
       `.chatcli/tmp/report_input.json` as fallback.
-   b. Then run the template renderer to produce the final HTML in the SAME
+   c. Then run the template renderer to produce the final HTML. Use the user's
+      requested HTML path when present; otherwise produce it in the SAME
       directory as the sample:
-      `python -m chatcli.templates.malware_report <json_path> <sample_dir>/<sample_stem>_triage_report.html`
+      `python -m chatcli.templates.malware_report <json_path> <requested_or_default_output.html>`
       Naming example: `C:\samples\1_triage_report.html` for `C:\samples\1.exe`.
-   c. If the JSON schema validation fails, fix the JSON and retry.
+   d. If the JSON schema validation fails, fix the JSON and retry.
       If dynamic analysis was performed, the JSON MUST include
       `dynamic_validation`, `dynamic_evidence`, and `evidence_chain`; the HTML
       title must be `恶意样本分析报告` or equivalent, not
       `恶意样本静态分析报告`.
-   d. If the template renderer is unavailable, fall back to writing a
-      self-contained HTML file alongside the sample using `write_file`.
+   e. If the template renderer is unavailable, fall back to writing a
+      self-contained HTML file using `write_file` at the user's requested path
+      when present, otherwise alongside the sample.
       Include `<meta charset="utf-8">` and make it self-contained.
    The template provides rich styling (dark/light mode, collapsible sections,
    badges, card layout), so the JSON pipeline is strongly preferred.
-   **Output the report alongside the sample file, NOT under `.chatcli/reports/`.**
+   **Output the report at the user-requested HTML path when one was specified;
+   otherwise output it alongside the sample file, NOT under `.chatcli/reports/`.**
    A quality gate checklist, task-complete note, or tool execution summary is
    only a process report. It is not a final report unless the HTML contains the
    conclusion, identity, attack chain, capabilities, IOC, impact, detection,

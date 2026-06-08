@@ -24,7 +24,7 @@ from .child_state import (
     MAX_CONCURRENT_CHILDREN,
     MAX_TOTAL_CHILDREN,
 )
-from .orchestrate import get_role_allowed_tools, get_role_prompt, get_observer_roles
+from .orchestrate import ANALYSIS_ROLES, get_role_allowed_tools, get_role_prompt, get_observer_roles
 from .worklog import get_task_status
 
 
@@ -500,12 +500,15 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
         """Build the prompt for an observer child agent."""
         role_name = getattr(child, "_observer_role", "observer")
         result_dir = getattr(child, "_observer_result_dir", "")
+        role = ANALYSIS_ROLES.get(role_name, {})
         role_prompt = get_role_prompt(role_name)
         notes_path = Path(self.config.workspace) / ".chatcli" / "children" / f"{child.name}.md"
+        patterns = role.get("input_patterns", [])
 
         role_section = role_prompt if role_prompt else f"You are the {role_name}."
         dir_section = (
             f"\n\nResult directory to analyze: {result_dir}\n"
+            f"Start by using glob on these role input patterns: {', '.join(patterns) or '(all relevant files)'}.\n"
             f"Read all relevant files from this directory using the read_file tool."
         ) if result_dir else ""
 
@@ -523,6 +526,9 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             "- Do not modify `.chatcli/task.md` or `.chatcli/worklog.md`.\n"
             "- Be precise about evidence: cite exact file paths, line numbers, "
             "  hash values, API names, offsets.\n"
+            "- For dynamic/monitor evidence, prioritize structured fields such as "
+            "  dynamic_status.events, process_metrics.count/sample/top_memory, "
+            "  traffic_capture, file_activity, and observer_agents before raw logs.\n"
             "- Use confidence labels (high/medium/low) for every claim.\n"
             "- End with a clear summary block that the correlator can consume.\n"
         )
@@ -634,4 +640,3 @@ class ChildWindowMixin(ChildRecordMixin, AutoRequestMixin):
             "[yellow]Usage:[/] /child new|run|list|show|summarize|wait|close"
         )
         return True
-

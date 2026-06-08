@@ -51,6 +51,28 @@ class StaticToolConfigTests(unittest.TestCase):
         self.assertEqual(row["name"], "capa")
         self.assertEqual(row["path"], "python -m capa.main")
 
+    def test_tool_health_reports_configured_sysmon_and_x64dbg_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            sysmon_path = base / "Program Files" / "reverseTools" / "Sysmon.exe"
+            x64dbg_path = base / "Program Files" / "reverseTools" / "x64dbg.exe"
+            sysmon_path.parent.mkdir(parents=True, exist_ok=True)
+            sysmon_path.write_text("", encoding="utf-8")
+            x64dbg_path.write_text("", encoding="utf-8")
+            config = SimpleNamespace(
+                sysmon_path=str(sysmon_path),
+                x64dbg_path=str(x64dbg_path),
+            )
+
+            with patch("chatcli.tools.tool_health._which_any", return_value=None):
+                sysmon = _probe_external("sysmon", include_versions=False, config=config)
+                x64dbg = _probe_external("x64dbg", include_versions=False, config=config)
+
+        self.assertTrue(sysmon["available"])
+        self.assertEqual(sysmon["path"], str(sysmon_path))
+        self.assertTrue(x64dbg["available"])
+        self.assertEqual(x64dbg["path"], str(x64dbg_path))
+
     def test_server_guest_agent_uses_capa_main_for_static_capa(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

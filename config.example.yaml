@@ -85,6 +85,8 @@ permissions:
   path_rules: []
 
 max_tool_rounds: 50
+# Evidence-heavy tasks only; normal chat can answer directly.
+min_tool_rounds: 5
 self_correction: true
 max_self_correction_rounds: 3
 max_work_cycles: 20

@@ -51,6 +51,8 @@ class StandaloneGuestAgentTests(unittest.TestCase):
         self.assertIn("yara-python", tools)
         self.assertIn("diec", tools)
         self.assertIn("ida", tools)
+        self.assertIn("sysmon", tools)
+        self.assertIn("x64dbg", tools)
         self.assertTrue(tools["ida"]["available"])
         self.assertEqual(tools["ida"]["path"], str(ida))
         self.assertEqual(tools["capa"]["command"].split()[1:3], ["-m", "capa.main"])
@@ -107,6 +109,8 @@ class StandaloneGuestAgentTests(unittest.TestCase):
         self.assertEqual(data["status"], "collected")
         self.assertEqual(data["case_id"], case_id)
         self.assertEqual(data["traffic_capture"]["pcap_bytes"], 4)
+        self.assertEqual(data["process_metrics"]["status"], "not_collected")
+        self.assertEqual(data["process_metrics"]["count"], 0)
         self.assertIn("observer_agents", data)
         self.assertIn("file_activity", data)
 
@@ -146,6 +150,77 @@ class StandaloneGuestAgentTests(unittest.TestCase):
         self.assertTrue(
             (self.base / "outbox" / "case-standalone" / "verify" / "server_status_after.json").exists()
         )
+
+    def test_standalone_dynamic_dry_run_documents_extended_collectors(self):
+        sample = self.base / "extended.exe"
+        sample.write_bytes(b"MZsample")
+
+        prepared = self.client.post(
+            "/api/v1/cases/prepare",
+            json={
+                "case_id": "case-extended",
+                "sample_path": str(sample),
+                "analysis_plan": {"static": False, "dynamic": True},
+                "dynamic_config": {
+                    "collectors": ["pcap", "procmon", "tshark", "sysmon", "zeek", "suricata"],
+                    "validation_targets": {
+                        "network_indicators": {"domains": ["example.test"], "ports": [443]},
+                        "watch_processes": ["extended.exe"],
+                    },
+                },
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(prepared.status_code, 200)
+
+        run = self.client.post(
+            "/api/v1/cases/case-extended/run",
+            json={"mode": "dry_run"},
+            headers=self.headers,
+        )
+
+        self.assertEqual(run.status_code, 200)
+        dynamic_dir = self.base / "outbox" / "case-extended" / "dynamic"
+        dynamic_data = json.loads((dynamic_dir / "dynamic_status.json").read_text(encoding="utf-8"))
+        events = [event["event"] for event in dynamic_data["events"]]
+        self.assertIn("would_export_sysmon", events)
+        self.assertIn("would_run_zeek", events)
+        self.assertIn("would_run_suricata", events)
+        self.assertIn("would_export_procmon_csv", events)
+        self.assertIn("would_screen_dynamic_targets", events)
+        self.assertTrue((dynamic_dir / "targeting_plan.json").exists())
+        self.assertTrue((dynamic_dir / "dynamic_targeting_plan.json").exists())
+        self.assertIn("sysmon_evtx", dynamic_data["outputs"])
+        self.assertIn("zeek_dir", dynamic_data["outputs"])
+        self.assertIn("suricata_dir", dynamic_data["outputs"])
+
+    def test_run_case_background_returns_running_without_blocking(self):
+        sample = self.base / "background.exe"
+        sample.write_bytes(b"MZsample")
+
+        prepared = self.client.post(
+            "/api/v1/cases/prepare",
+            json={
+                "case_id": "case-background",
+                "sample_path": str(sample),
+                "analysis_plan": {"static": True},
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(prepared.status_code, 200)
+
+        with patch("server.chatcli_guest_agent.threading.Thread") as thread_cls:
+            run = self.client.post(
+                "/api/v1/cases/case-background/run",
+                json={"mode": "dry_run", "background": True},
+                headers=self.headers,
+            )
+
+        self.assertEqual(run.status_code, 200)
+        self.assertEqual(run.json()["status"], "running")
+        self.assertTrue(run.json()["background"])
+        thread_cls.assert_called_once()
+        thread_cls.return_value.start.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security Audit"
+  short_description: "Find source-code vulnerabilities defensively"
+  default_prompt: "Use $security-audit to audit this codebase for vulnerabilities, information leaks, exploitability, and fixes."

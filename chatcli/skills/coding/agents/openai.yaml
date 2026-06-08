@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coding Workflow"
+  short_description: "Implement, fix, refactor, test, and verify"
+  default_prompt: "Use $coding to implement the requested source change, update tests, and verify the result."

@@ -1,27 +1,6 @@
 ---
 name: security-audit
-description: Defensive source-code security audit workflow for finding vulnerabilities, information leaks, risky exploit paths, and remediation advice in decompiled WeChat/mini-program files, CMS source code, web apps, plugins, backend services, or other codebases. Use when the user asks for 代码审计, 安全审计, 漏洞挖掘, 信息泄露检查, CMS漏洞, 反编译文件分析, or vulnerability review.
-aliases:
-  - security
-  - vuln-audit
-triggers:
-  - security audit
-  - vulnerability
-  - vuln
-  - cms
-  - web app
-  - plugin
-  - backend
-  - mini-program
-  - wechat
-  - 信息泄露
-  - 漏洞
-  - 代码审计
-  - 安全审计
-  - 漏洞挖掘
-  - 越权
-  - 任意文件
-  - 反编译文件
+description: Defensive source-code security audit workflow for finding vulnerabilities, information leaks, risky exploit paths, and remediation advice in decompiled WeChat or mini-program files, CMS source code, web apps, plugins, backend services, APIs, cloud/serverless code, or other codebases. Use when the user asks for security audit, vulnerability review, vuln audit, CMS/web/backend/plugin/mini-program review, 代码审计, 安全审计, 漏洞挖掘, 信息泄露检查, CMS漏洞, 反编译文件分析, 越权, 任意文件, or vulnerability remediation.
 ---
 
 # Security Audit Skill

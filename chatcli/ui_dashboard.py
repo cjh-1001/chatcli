@@ -51,10 +51,12 @@ class Dashboard:
         remote_status_fn: Callable[[], dict] | None = None,
         child_status_fn: Callable[[], list[dict]] | None = None,
         refresh_seconds: float = 3.0,
+        case_id: str = "",
     ):
         self._remote_fn = remote_status_fn or (lambda: {})
         self._child_fn = child_status_fn or (lambda: [])
         self.refresh_seconds = refresh_seconds
+        self.case_id = case_id
         self._running = False
 
     def run(self):
@@ -89,6 +91,8 @@ class Dashboard:
 
     def _render_header(self) -> Panel:
         text = Text("chatcli Analysis Monitor", style="bold cyan")
+        if self.case_id:
+            text.append(f"  │  case {self.case_id}", style="green")
         text.append(f"  │  {time.strftime('%H:%M:%S')}", style="dim")
         return Panel(text, box=box.SIMPLE)
 
@@ -131,6 +135,8 @@ class Dashboard:
         agents = monitor.get("observer_agents", [])
         traffic = monitor.get("traffic_capture", {})
         dynamic_status = monitor.get("dynamic_status", {})
+        process_metrics = monitor.get("process_metrics", {})
+        events = dynamic_status.get("events", []) if isinstance(dynamic_status, dict) else []
 
         table = Table(title="Remote Telemetry", box=box.SIMPLE)
         table.add_column("Observer", style="cyan", no_wrap=True)
@@ -143,7 +149,10 @@ class Dashboard:
             table.add_row(
                 "dynamic",
                 dynamic_status.get("status", "none"),
-                f"pcap={traffic.get('pcap_bytes', 0)} bytes; files={len(monitor.get('file_activity', []))}",
+                f"case={monitor.get('case_id') or '(latest)'}; "
+                f"pcap={traffic.get('pcap_bytes', 0)} bytes; "
+                f"events={len(events)}; processes={process_metrics.get('count', 0)}; "
+                f"files={len(monitor.get('file_activity', []))}",
             )
             for agent in agents:
                 status = agent.get("status", "?")
@@ -186,6 +195,8 @@ def build_dashboard_callbacks(
     remote_base_url: str = "",
     remote_token: str = "",
     children_dict: dict | None = None,
+    case_id: str = "",
+    include_probes: bool = True,
 ) -> tuple[Callable[[], dict], Callable[[], list[dict]]]:
     """Build callback functions for the Dashboard from chatcli state.
 
@@ -215,8 +226,12 @@ def build_dashboard_callbacks(
                     timeout=5,
                 )
                 cases = r2.json().get("cases", []) if r2.status_code == 200 else []
+                params = {"probes": "true" if include_probes else "false"}
+                if case_id:
+                    params["case_id"] = case_id
                 r3 = httpx.get(
                     f"{remote_base_url}/api/v1/monitor/snapshot",
+                    params=params,
                     headers={"Authorization": f"Bearer {remote_token}"},
                     timeout=8,
                 )

@@ -61,7 +61,7 @@ permissions:
   protect_sensitive_files: true
 
 max_tool_rounds: 80
-min_tool_rounds: 5              # require at least 5 tool calls before final answer
+min_tool_rounds: 5              # evidence-heavy tasks only; normal chat can answer directly
 auto_compress: true
 context_file: .chatcli/context.md
 """
@@ -233,6 +233,8 @@ _TOOL_PATH_FIELDS = (
     ("die_path", "DIE_PATH", "Detect It Easy 路径", '例如 D:/Tools/DetectItEasy/stuff/diec.exe'),
     ("exiftool_path", "EXIFTOOL_PATH", "ExifTool 路径", '例如 D:/Tools/exiftool.exe'),
     ("upx_path", "UPX_PATH", "UPX 路径", '例如 D:/Tools/upx.exe'),
+    ("sysmon_path", "SYSMON_PATH", "Sysmon 路径", '例如 C:/Program Files/reverseTools/Sysmon.exe'),
+    ("x64dbg_path", "X64DBG_PATH", "x64dbg 路径", '例如 C:/Program Files/reverseTools/x64dbg.exe'),
     ("capa_path", "CAPA_PATH", "capa 路径 (flare-capa)", '例如 D:/Tools/capa.exe'),
     ("floss_path", "FLOSS_PATH", "FLOSS 路径 (flare-floss)", '例如 D:/Tools/floss.exe'),
     ("yara_path", "YARA_PATH", "YARA 路径 (yara64.exe)", '例如 D:/Tools/yara64.exe'),

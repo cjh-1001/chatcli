@@ -102,6 +102,14 @@ class RemoteConsumeTool(Tool):
 
             # Download all files recursively
             manifest = self._download_tree(client, remote_job_dir, local_dir)
+            report = None
+            report_error = ""
+            try:
+                from chatcli.remote.result_report import build_malware_report_from_results
+
+                report = build_malware_report_from_results(local_dir)
+            except Exception as exc:
+                report_error = str(exc)
 
             # Clean remote if requested
             if clean_remote and has_done:
@@ -126,6 +134,24 @@ class RemoteConsumeTool(Tool):
                     if len(files) > 10:
                         lines.append(f"  ... and {len(files) - 10} more")
 
+            report_meta = {}
+            if report is not None:
+                lines.extend([
+                    "",
+                    f"Report JSON: {report.json_path}",
+                    f"Report HTML: {report.html_path}",
+                ])
+                if report.errors:
+                    lines.append(f"Report validation warnings: {len(report.errors)}")
+                report_meta = {
+                    "report_json": str(report.json_path),
+                    "report_html": str(report.html_path),
+                    "report_errors": report.errors,
+                }
+            elif report_error:
+                lines.extend(["", f"Report generation failed: {report_error}"])
+                report_meta = {"report_error": report_error}
+
             if has_failed:
                 lines.insert(2, f"Error: {fail_check.strip()[:200]}")
 
@@ -136,6 +162,7 @@ class RemoteConsumeTool(Tool):
                     "status": status_text,
                     "local_dir": str(local_dir),
                     "error": fail_check.strip() if has_failed else "",
+                    **report_meta,
                     **manifest,
                 },
             )

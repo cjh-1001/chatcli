@@ -11,6 +11,9 @@ from pathlib import Path
 
 logger = logging.getLogger("chatcli.remote.ssh")
 
+MAX_STDOUT_BYTES = 1_000_000
+MAX_STDERR_BYTES = 200_000
+
 
 class SSHClient:
     """SSH client wrapping paramiko for remote execution + file transfer."""
@@ -73,6 +76,8 @@ class SSHClient:
         command: str,
         timeout: float = 300.0,
         workdir: str = "",
+        max_stdout_bytes: int = MAX_STDOUT_BYTES,
+        max_stderr_bytes: int = MAX_STDERR_BYTES,
     ) -> tuple[int, str, str]:
         """Execute a command on the remote host.
 
@@ -90,34 +95,71 @@ class SSHClient:
         chan.settimeout(timeout)
         chan.exec_command(command)
 
-        stdout = b""
-        stderr = b""
+        stdout = bytearray()
+        stderr = bytearray()
+        stdout_seen = 0
+        stderr_seen = 0
+        stdout_truncated = False
+        stderr_truncated = False
+
+        def collect(target: bytearray, chunk: bytes, seen: int, limit: int) -> tuple[int, bool]:
+            if not chunk:
+                return seen, seen > limit
+            remaining = max(0, limit - len(target))
+            if remaining:
+                target.extend(chunk[:remaining])
+            seen += len(chunk)
+            return seen, seen > limit
+
         while not chan.exit_status_ready():
             if chan.recv_ready():
-                stdout += chan.recv(65536)
+                stdout_seen, stdout_truncated = collect(
+                    stdout,
+                    chan.recv(65536),
+                    stdout_seen,
+                    max_stdout_bytes,
+                )
             if chan.recv_stderr_ready():
-                stderr += chan.recv_stderr(65536)
+                stderr_seen, stderr_truncated = collect(
+                    stderr,
+                    chan.recv_stderr(65536),
+                    stderr_seen,
+                    max_stderr_bytes,
+                )
             if time.monotonic() - started > timeout:
                 chan.close()
-                return (-1, stdout.decode("utf-8", errors="replace"),
-                        f"timeout after {timeout:.0f}s")
+                return (
+                    -1,
+                    _decode_output(bytes(stdout), stdout_truncated, stdout_seen, max_stdout_bytes),
+                    f"timeout after {timeout:.0f}s",
+                )
 
         # Drain remaining
         while chan.recv_ready():
-            stdout += chan.recv(65536)
+            stdout_seen, stdout_truncated = collect(
+                stdout,
+                chan.recv(65536),
+                stdout_seen,
+                max_stdout_bytes,
+            )
         while chan.recv_stderr_ready():
-            stderr += chan.recv_stderr(65536)
+            stderr_seen, stderr_truncated = collect(
+                stderr,
+                chan.recv_stderr(65536),
+                stderr_seen,
+                max_stderr_bytes,
+            )
 
         exit_code = chan.recv_exit_status()
         elapsed = time.monotonic() - started
         logger.info(
             "SSH exec done: exit=%d, stdout=%d bytes, stderr=%d bytes, %.1fs",
-            exit_code, len(stdout), len(stderr), elapsed,
+            exit_code, stdout_seen, stderr_seen, elapsed,
         )
         return (
             exit_code,
-            stdout.decode("utf-8", errors="replace"),
-            stderr.decode("utf-8", errors="replace"),
+            _decode_output(bytes(stdout), stdout_truncated, stdout_seen, max_stdout_bytes),
+            _decode_output(bytes(stderr), stderr_truncated, stderr_seen, max_stderr_bytes),
         )
 
     def put_file(self, local_path: str, remote_path: str) -> bool:
@@ -195,3 +237,10 @@ def _quote_cmd(s: str) -> str:
     if " " in s:
         return '"' + s + '"'
     return s
+
+
+def _decode_output(data: bytes, truncated: bool, seen: int, limit: int) -> str:
+    text = data.decode("utf-8", errors="replace")
+    if not truncated:
+        return text
+    return text + f"\n[TRUNCATED: remote stream was {seen} bytes, kept first {limit}]"

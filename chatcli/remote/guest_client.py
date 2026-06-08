@@ -36,6 +36,7 @@ class GuestAgentClient:
             self._client = httpx.Client(
                 timeout=httpx.Timeout(self.timeout),
                 verify=self.verify,
+                trust_env=False,
             )
         return self._client
 
@@ -133,6 +134,8 @@ class GuestAgentClient:
         sample_path: str = "",
         analysis_plan: dict | None = None,
         dynamic_config: dict | None = None,
+        background: bool = False,
+        request_timeout: float | None = None,
     ) -> dict:
         """Trigger analysis. Returns {case_id, status}."""
         body: dict = {"mode": mode}
@@ -142,10 +145,13 @@ class GuestAgentClient:
             body["analysis_plan"] = analysis_plan
         if dynamic_config:
             body["dynamic_config"] = dynamic_config
+        if background:
+            body["background"] = True
         r = self.client.post(
             f"{self.base_url}/api/v1/cases/{case_id}/run",
             json=body,
             headers=self._headers(),
+            timeout=request_timeout,
         )
         r.raise_for_status()
         return r.json()

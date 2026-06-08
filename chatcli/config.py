@@ -40,7 +40,7 @@ DEFAULT_ASK_TOOLS = [
     "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
     "malware_share_package", "chatcli_auto_request",
     "remote_exec", "remote_submit", "remote_fetch", "remote_vm_control",
-    "remote_watch", "remote_consume", "remote_guest",
+    "remote_watch", "remote_consume", "remote_guest", "remote_batch_analyze",
 ]
 BUILTIN_AUTO_TOOLS = (
     "ip_lookup", "json_extract", "ioc_quality_classifier", "detection_rule_lint",
@@ -57,7 +57,7 @@ BUILTIN_ASK_TOOLS = (
     "external_static_analyze", "ghidra_analyze", "angr_triage", "yara_scan", "upx_unpack", "binary_patch",
     "malware_share_package", "chatcli_auto_request",
     "remote_exec", "remote_submit", "remote_fetch", "remote_vm_control",
-    "remote_watch", "remote_consume", "remote_guest",
+    "remote_watch", "remote_consume", "remote_guest", "remote_batch_analyze",
 )
 CONFIG_FILENAMES = ("config.yaml", "config.yml")
 
@@ -130,7 +130,7 @@ class Config:
     permissions: PermissionConfig = field(default_factory=PermissionConfig)
     remote: RemoteConfig = field(default_factory=RemoteConfig)
     max_tool_rounds: int = 80
-    min_tool_rounds: int = 5        # minimum tools before model can produce a final answer (prevents shallow analysis)
+    min_tool_rounds: int = 5        # minimum tools for evidence-heavy tasks only (prevents shallow analysis)
     self_correction: bool = True
     max_self_correction_rounds: int = 3
     max_work_cycles: int = 20
@@ -146,6 +146,8 @@ class Config:
     die_path: str = ""
     exiftool_path: str = ""
     upx_path: str = ""
+    sysmon_path: str = ""
+    x64dbg_path: str = ""
     capa_path: str = ""
     floss_path: str = ""
     yara_path: str = ""
@@ -307,6 +309,10 @@ class Config:
             cfg.exiftool_path = os.environ["EXIFTOOL_PATH"]
         if os.environ.get("UPX_PATH"):
             cfg.upx_path = os.environ["UPX_PATH"]
+        if os.environ.get("SYSMON_PATH"):
+            cfg.sysmon_path = os.environ["SYSMON_PATH"]
+        if os.environ.get("X64DBG_PATH"):
+            cfg.x64dbg_path = os.environ["X64DBG_PATH"]
         if os.environ.get("CAPA_PATH"):
             cfg.capa_path = os.environ["CAPA_PATH"]
         if os.environ.get("FLOSS_PATH"):
@@ -404,7 +410,8 @@ class Config:
             "max_work_cycles", "smart_work", "confirm_plan", "show_diffs",
             "max_diff_lines", "tool_preview_lines", "tool_preview_chars",
             "search_backend", "ida_path", "ghidra_path", "die_path",
-            "exiftool_path", "upx_path", "capa_path", "floss_path",
+            "exiftool_path", "upx_path", "sysmon_path", "x64dbg_path",
+            "capa_path", "floss_path",
             "yara_path", "ida_mcp_url", "ida_mcp_start_command",
             "auto_resume", "auto_compress", "compress_threshold", "max_retries",
             "temp_script_dir", "temp_script_name", "enforce_temp_script_iteration",
@@ -432,7 +439,7 @@ class Config:
         reverse = data.get("reverse")
         if isinstance(reverse, dict):
             for key in ("ida_path", "ghidra_path", "die_path", "exiftool_path",
-                        "upx_path", "capa_path", "floss_path",
+                        "upx_path", "sysmon_path", "x64dbg_path", "capa_path", "floss_path",
                         "yara_path", "ida_mcp_url", "ida_mcp_start_command"):
                 if key in reverse:
                     setattr(cfg, key, reverse[key])

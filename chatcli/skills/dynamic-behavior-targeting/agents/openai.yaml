@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dynamic Behavior Targeting"
+  short_description: "Plan targeted dynamic malware validation"
+  default_prompt: "Use $dynamic-behavior-targeting to convert static malware behavior hypotheses into focused PCAP, Procmon, and host telemetry screening."

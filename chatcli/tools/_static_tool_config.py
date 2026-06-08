@@ -38,6 +38,8 @@ TOOL_CONFIG_ATTRS = {
     **STATIC_ANALYZER_CONFIG_ATTRS,
     "upx": "upx_path",
     "yara": "yara_path",
+    "sysmon": "sysmon_path",
+    "x64dbg": "x64dbg_path",
 }
 
 PYTHON_TOOL_FALLBACKS = {

@@ -51,6 +51,7 @@ from .remote_vm import RemoteVMControlTool
 from .remote_watch import RemoteWatchTool
 from .remote_consume import RemoteConsumeTool
 from .remote_guest import RemoteGuestTool
+from .remote_batch import RemoteBatchAnalyzeTool
 from .orchestrate_results import OrchestrateResultsTool
 
 
@@ -105,7 +106,7 @@ def create_registry(config=None) -> ToolRegistry:
         MalwareSharePackageTool(),
         ReverseTechniqueMapTool(),
         ReverseEvidenceMapTool(),
-        RuntimeStringHooksTool(),
+        RuntimeStringHooksTool(config),
         ExternalStaticAnalyzeTool(config),
         YaraScanTool(config),
         UpxUnpackTool(config),
@@ -122,6 +123,7 @@ def create_registry(config=None) -> ToolRegistry:
         tools.append(RemoteWatchTool(config))
         tools.append(RemoteConsumeTool(config))
         tools.append(RemoteGuestTool(config))
+        tools.append(RemoteBatchAnalyzeTool(config))
         tools.append(OrchestrateResultsTool(config))
     for tool in tools:
         registry.register(tool)
@@ -150,7 +152,7 @@ __all__ = [
     "ReverseTechniqueMapTool", "ReverseEvidenceMapTool",
     "UpxUnpackTool", "ToolHealthCheckTool", "ChatcliAutoRequestTool",
     "RemoteExecTool", "RemoteSubmitTool", "RemoteFetchTool", "RemoteVMControlTool",
-    "RemoteWatchTool", "RemoteConsumeTool", "RemoteGuestTool",
+    "RemoteWatchTool", "RemoteConsumeTool", "RemoteGuestTool", "RemoteBatchAnalyzeTool",
     "OrchestrateResultsTool",
     "create_registry",
 ]

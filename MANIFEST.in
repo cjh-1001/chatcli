@@ -7,9 +7,13 @@ include pyproject.toml
 # Skills data files
 recursive-include chatcli/skills *.md
 recursive-include chatcli/skills *.py
+recursive-include chatcli/skills *.yaml
+recursive-include chatcli/skills *.yml
+recursive-include chatcli/skills *.json
 
 # Template data files
 recursive-include chatcli/templates *.json
+recursive-include chatcli/templates *.html
 
 # IDA helper scripts
 recursive-include chatcli/ida_scripts *.py

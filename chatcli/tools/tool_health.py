@@ -71,6 +71,8 @@ EXECUTABLE_PROBES = {
     "upx": ["upx"],
     "frida": ["frida"],
     "tshark": ["tshark"],
+    "sysmon": ["Sysmon", "Sysmon64", "sysmon"],
+    "x64dbg": ["x64dbg"],
     "tcpdump": ["tcpdump"],
     "strings": ["strings"],
     "file": ["file"],
@@ -121,6 +123,8 @@ INSTALL_HINTS = {
     "yara": "Install YARA CLI for rule scanning.",
     "upx": "Install UPX only when UPX unpacking is needed.",
     "tshark": "Install Wireshark/tshark for packet capture triage.",
+    "sysmon": "Install Sysmon and configure sysmon_path if needed.",
+    "x64dbg": "Install x64dbg and configure x64dbg_path if needed.",
     "jadx": "Install jadx for APK and Android DEX analysis.",
     "apktool": "Install apktool for Android resource and manifest inspection.",
     "ilspycmd": "Install ilspycmd for .NET decompilation workflows.",
@@ -254,12 +258,12 @@ class ToolHealthCheckTool(Tool):
         "properties": {
             "tools": {
                 "type": "array",
-                "description": (
-                    "Optional names to check. Examples: ida, ida_analyze, binary_hexdump, "
-                    "external_static_analyze, ghidra_analyze, angr_triage, yara_scan, "
-                    "upx_unpack, git, python, ilspycmd, jadx, apktool, tshark. "
-                    "Default checks common reverse-analysis dependencies."
-                ),
+                    "description": (
+                        "Optional names to check. Examples: ida, ida_analyze, binary_hexdump, "
+                        "external_static_analyze, ghidra_analyze, angr_triage, yara_scan, "
+                        "upx_unpack, git, python, ilspycmd, jadx, apktool, tshark, sysmon, x64dbg. "
+                        "Default checks common reverse-analysis dependencies."
+                    ),
                 "items": {"type": "string"},
             },
             "include_versions": {
@@ -299,6 +303,8 @@ class ToolHealthCheckTool(Tool):
             "yara_scan",
             "upx_unpack",
             "tshark",
+            "sysmon",
+            "x64dbg",
             "strings",
             "file",
             "objdump",

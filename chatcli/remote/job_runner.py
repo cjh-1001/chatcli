@@ -26,12 +26,92 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from chatcli.remote.behavior_hypotheses import (
+    derive_static_behavior_targets as _derive_static_behavior_targets,
+    merge_dynamic_config as _merge_dynamic_config_shared,
+)
+from chatcli.remote.procmon_screen import (
+    screen_procmon_csv as _screen_procmon_csv_shared,
+    target_values as _target_values_shared,
+    tshark_target_filter as _tshark_target_filter_shared,
+)
+
 
 # ── Constants ────────────────────────────────────────────────────
 
 DEFAULT_OUTBOX = Path("C:/analysis/outbox")
 DEFAULT_TOOLS = Path("C:/tools")
 DEFAULT_PYTHON = "python"
+
+
+def _write_command_output(output_path: Path, result: subprocess.CompletedProcess[str]) -> None:
+    output_path.write_text(
+        (result.stdout or "") + (("\n[stderr]\n" + result.stderr) if result.stderr else ""),
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
+def _target_values(dynamic_config: dict[str, Any], sample_name: str = "") -> list[str]:
+    return _target_values_shared(dynamic_config, sample_name)
+
+
+def _read_text_file(path: Path, limit: int = 500_000) -> str:
+    from chatcli.remote.behavior_hypotheses import read_text_file
+
+    return read_text_file(path, limit)
+
+
+def _matching_lines(text: str, terms: list[str], limit: int = 8) -> list[str]:
+    from chatcli.remote.behavior_hypotheses import matching_lines
+
+    return matching_lines(text, terms, limit)
+
+
+def _extract_domains(text: str, limit: int = 20) -> list[str]:
+    from chatcli.remote.behavior_hypotheses import extract_domains
+
+    return extract_domains(text, limit)
+
+
+def _extract_ips(text: str, limit: int = 20) -> list[str]:
+    from chatcli.remote.behavior_hypotheses import extract_ips
+
+    return extract_ips(text, limit)
+
+
+def _extract_urls(text: str, limit: int = 20) -> list[str]:
+    from chatcli.remote.behavior_hypotheses import extract_urls
+
+    return extract_urls(text, limit)
+
+
+def _merge_list(target: dict[str, Any], key: str, values: list[str]) -> None:
+    from chatcli.remote.behavior_hypotheses import merge_list
+
+    merge_list(target, key, values)
+
+
+def _merge_network_indicators(targets: dict[str, Any], indicators: dict[str, list[str]]) -> None:
+    from chatcli.remote.behavior_hypotheses import merge_network_indicators
+
+    merge_network_indicators(targets, indicators)
+
+
+def _merge_dynamic_config(base: dict[str, Any] | None, derived: dict[str, Any]) -> dict[str, Any]:
+    return _merge_dynamic_config_shared(base, derived)
+
+
+def derive_static_behavior_targets(outbox_dir: Path, sample_name: str) -> dict[str, Any]:
+    return _derive_static_behavior_targets(outbox_dir, sample_name)
+
+
+def _tshark_target_filter(dynamic_config: dict[str, Any]) -> str:
+    return _tshark_target_filter_shared(dynamic_config)
+
+
+def _screen_procmon_csv(csv_path: Path, dynamic_dir: Path, dynamic_config: dict[str, Any], sample_name: str) -> list[Path]:
+    return _screen_procmon_csv_shared(csv_path, dynamic_dir, dynamic_config, sample_name)
 
 # Available static analysis tools (checked in order)
 STATIC_TOOLS = [
@@ -260,15 +340,32 @@ def run_dynamic_analysis(
     status_path = dynamic_dir / "dynamic_status.json"
     network_pcap = dynamic_dir / "network.pcapng"
     procmon_pml = dynamic_dir / "procmon.pml"
+    procmon_csv = dynamic_dir / "procmon.csv"
     vm = vm_config or {}
     timeout_seconds = int(vm.get("timeout_seconds") or 60)
     collectors = set(vm.get("collectors") or ["procmon", "pcap", "tshark"])
     interface = str(vm.get("network_interface") or vm.get("interface") or "1")
+    validation_targets = vm.get("validation_targets")
+    if validation_targets:
+        plan_payload = json.dumps(
+            {
+                "validation_targets": validation_targets,
+                "static_hypotheses": vm.get("static_hypotheses", []),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        (dynamic_dir / "targeting_plan.json").write_text(plan_payload, encoding="utf-8")
+        (dynamic_dir / "dynamic_targeting_plan.json").write_text(plan_payload, encoding="utf-8")
 
     tools = {
         "procmon": os.environ.get("CHATCLI_TOOL_PROCMON", r"C:\Tools\Procmon64.exe"),
         "dumpcap": os.environ.get("CHATCLI_TOOL_DUMPCAP", "dumpcap"),
         "tshark": os.environ.get("CHATCLI_TOOL_TSHARK", "tshark"),
+        "zeek": os.environ.get("CHATCLI_TOOL_ZEEK", "zeek"),
+        "suricata": os.environ.get("CHATCLI_TOOL_SURICATA", "suricata"),
+        "wevtutil": os.environ.get("CHATCLI_TOOL_WEVTUTIL", "wevtutil"),
+        "sysmon": os.environ.get("CHATCLI_TOOL_SYSMON", r"C:\Program Files\reverseTools\Sysmon.exe"),
     }
     availability = {name: _command_available(command) for name, command in tools.items()}
     events: list[dict[str, Any]] = []
@@ -290,11 +387,21 @@ def run_dynamic_analysis(
             "events": events,
             "outputs": {
                 "procmon_pml": str(procmon_pml),
+                "procmon_csv": str(procmon_csv),
                 "network_pcap": str(network_pcap),
                 "network_summary": str(dynamic_dir / "network_summary.txt"),
                 "dns": str(dynamic_dir / "dns.txt"),
                 "http": str(dynamic_dir / "http.txt"),
                 "conversations": str(dynamic_dir / "conversations.txt"),
+                "tls_sni": str(dynamic_dir / "tls_sni.txt"),
+                "tcp_syn": str(dynamic_dir / "tcp_syn.txt"),
+                "targeted_network_iocs": str(dynamic_dir / "targeted_network_iocs.txt"),
+                "sysmon_evtx": str(dynamic_dir / "sysmon.evtx"),
+                "sysmon_text": str(dynamic_dir / "sysmon.txt"),
+                "zeek_dir": str(dynamic_dir / "zeek"),
+                "suricata_dir": str(dynamic_dir / "suricata"),
+                "targeting_plan": str(dynamic_dir / "targeting_plan.json"),
+                "dynamic_targeting_plan": str(dynamic_dir / "dynamic_targeting_plan.json"),
             },
         }
         payload.update(kwargs)
@@ -304,15 +411,26 @@ def run_dynamic_analysis(
         state.steps_completed.append("dynamic.sandbox (dry_run)")
         record("would_start_packet_capture", before_sample=True, tool=tools["dumpcap"], interface=interface)
         record("would_start_procmon", before_sample=True, tool=tools["procmon"])
+        if "sysmon" in collectors:
+            record("would_export_sysmon", after_sample=True, tool=tools["wevtutil"])
         record("would_execute_sample", sample=str(state.sample_path), timeout_seconds=timeout_seconds)
         record("would_stop_collectors", after_sample=True)
         record("would_parse_pcap", tool=tools["tshark"])
+        if "zeek" in collectors:
+            record("would_run_zeek", tool=tools["zeek"])
+        if "suricata" in collectors:
+            record("would_run_suricata", tool=tools["suricata"])
+        if "procmon" in collectors:
+            record("would_export_procmon_csv", tool=tools["procmon"], output=str(procmon_csv))
+        if validation_targets:
+            record("would_screen_dynamic_targets", target_count=len(_target_values(vm, state.sample_path.name)))
         write_status("dry_run")
         return
 
     capture_enabled = "pcap" in collectors and availability["dumpcap"]
     procmon_enabled = "procmon" in collectors and availability["procmon"]
-    if not capture_enabled and not procmon_enabled:
+    sysmon_enabled = "sysmon" in collectors and availability["wevtutil"]
+    if not capture_enabled and not procmon_enabled and not sysmon_enabled:
         note = "Dynamic analysis skipped: no configured collector is available."
         (dynamic_dir / "_SKIPPED").write_text(note, encoding="utf-8")
         record("skipped_no_collectors", reason=note)
@@ -320,6 +438,7 @@ def run_dynamic_analysis(
         return
 
     dumpcap_proc: subprocess.Popen | None = None
+    procmon_proc: subprocess.Popen | None = None
     sample_proc: subprocess.Popen | None = None
     try:
         if capture_enabled:
@@ -343,13 +462,19 @@ def run_dynamic_analysis(
                 "/BackingFile",
                 str(procmon_pml),
             ]
-            completed = subprocess.run(procmon_cmd, capture_output=True, text=True, timeout=20)
+            procmon_proc = subprocess.Popen(
+                procmon_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            time.sleep(2.0)
             record(
                 "procmon_started",
                 before_sample=True,
                 command=procmon_cmd,
-                exit_code=completed.returncode,
-                stderr=(completed.stderr or "")[:1000],
+                pid=procmon_proc.pid,
+                still_running=procmon_proc.poll() is None,
             )
             write_status("collecting")
             time.sleep(1.0)
@@ -411,16 +536,88 @@ def run_dynamic_analysis(
             ("dns.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "dns"]),
             ("http.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "http"]),
             ("conversations.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,tcp"]),
+            ("tls_sni.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "tls.handshake.extensions_server_name", "-T", "fields", "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst", "-e", "tls.handshake.extensions_server_name"]),
+            ("tcp_syn.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0", "-T", "fields", "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.dstport"]),
         ]
+        target_filter = _tshark_target_filter(vm)
+        if target_filter:
+            tshark_jobs.append((
+                "targeted_network_iocs.txt",
+                [
+                    tools["tshark"],
+                    "-r",
+                    str(network_pcap),
+                    "-Y",
+                    target_filter,
+                    "-T",
+                    "fields",
+                    "-e",
+                    "frame.time",
+                    "-e",
+                    "ip.src",
+                    "-e",
+                    "ip.dst",
+                    "-e",
+                    "dns.qry.name",
+                    "-e",
+                    "http.host",
+                    "-e",
+                    "http.request.uri",
+                    "-e",
+                    "tls.handshake.extensions_server_name",
+                ],
+            ))
         for output_name, command in tshark_jobs:
             output_path = dynamic_dir / output_name
             result = subprocess.run(command, capture_output=True, text=True, timeout=60)
-            output_path.write_text(
-                (result.stdout or "") + (("\n[stderr]\n" + result.stderr) if result.stderr else ""),
-                encoding="utf-8",
-                errors="replace",
-            )
+            _write_command_output(output_path, result)
             record("pcap_parsed", command=command, output=str(output_path), exit_code=result.returncode)
+
+    if procmon_enabled and procmon_pml.exists():
+        command = [tools["procmon"], "/AcceptEula", "/OpenLog", str(procmon_pml), "/SaveAs", str(procmon_csv)]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=90)
+            record("procmon_exported", command=command, output=str(procmon_csv), exit_code=result.returncode, stderr=(result.stderr or "")[:1000])
+            for output in _screen_procmon_csv_shared(procmon_csv, dynamic_dir, vm, state.sample_path.name):
+                record("procmon_screened", output=str(output))
+        except Exception as exc:
+            record("procmon_export_failed", command=command, error=f"{type(exc).__name__}: {exc}")
+
+    if sysmon_enabled:
+        evtx_path = dynamic_dir / "sysmon.evtx"
+        text_path = dynamic_dir / "sysmon.txt"
+        export_cmd = [tools["wevtutil"], "epl", "Microsoft-Windows-Sysmon/Operational", str(evtx_path), "/ow:true"]
+        text_cmd = [tools["wevtutil"], "qe", "Microsoft-Windows-Sysmon/Operational", "/f:text", "/c:2000", "/rd:true"]
+        for output_path, command in ((evtx_path, export_cmd), (text_path, text_cmd)):
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                if output_path == text_path:
+                    _write_command_output(output_path, result)
+                record("sysmon_exported", command=command, output=str(output_path), exit_code=result.returncode, stderr=(result.stderr or "")[:1000])
+            except Exception as exc:
+                record("sysmon_export_failed", command=command, output=str(output_path), error=f"{type(exc).__name__}: {exc}")
+
+    if "zeek" in collectors and availability["zeek"] and network_pcap.exists():
+        zeek_dir = dynamic_dir / "zeek"
+        zeek_dir.mkdir(parents=True, exist_ok=True)
+        command = [tools["zeek"], "-r", str(network_pcap)]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120, cwd=str(zeek_dir))
+            _write_command_output(zeek_dir / "_zeek_run.txt", result)
+            record("zeek_parsed", command=command, output=str(zeek_dir), exit_code=result.returncode)
+        except Exception as exc:
+            record("zeek_failed", command=command, output=str(zeek_dir), error=f"{type(exc).__name__}: {exc}")
+
+    if "suricata" in collectors and availability["suricata"] and network_pcap.exists():
+        suricata_dir = dynamic_dir / "suricata"
+        suricata_dir.mkdir(parents=True, exist_ok=True)
+        command = [tools["suricata"], "-r", str(network_pcap), "-l", str(suricata_dir), "-k", "none"]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+            _write_command_output(suricata_dir / "_suricata_run.txt", result)
+            record("suricata_parsed", command=command, output=str(suricata_dir), exit_code=result.returncode)
+        except Exception as exc:
+            record("suricata_failed", command=command, output=str(suricata_dir), error=f"{type(exc).__name__}: {exc}")
 
     state.steps_completed.append("dynamic.collectors")
     write_status("collected")
@@ -612,6 +809,11 @@ def run_job(
         # ── Static analysis ──────────────────────────────────
         if plan.get("static", True):
             run_static_analysis(state, mode)
+            if plan.get("dynamic", False):
+                derived = _derive_static_behavior_targets(state.outbox_dir, state.sample_path.name)
+                vm_config = _merge_dynamic_config_shared(vm_config, derived.get("dynamic_config", {}))
+                if derived.get("static_hypotheses"):
+                    vm_config["static_hypotheses"] = derived["static_hypotheses"]
             state.write_status()
 
         # ── Reverse engineering ──────────────────────────────

@@ -56,12 +56,11 @@ def resolve_tool_paths() -> dict[str, str]:
         "ghidra": resolve_ghidra_command(),
         "dumpcap": "dumpcap",
         "tshark": "tshark",
-        "zeek": "zeek",
-        "suricata": "suricata",
-        "sysmon": r"C:\Sysmon\Sysmon64.exe",
+        "sysmon": r"C:\Program Files\reverseTools\Sysmon.exe",
         "wevtutil": "wevtutil",
         "powershell": "powershell",
         "procmon": r"C:\Tools\Procmon64.exe",
+        "x64dbg": r"C:\Program Files\reverseTools\x64dbg.exe",
         "diec": "diec",
         "yara": "yara",
         "exiftool": "exiftool",
@@ -110,6 +109,8 @@ def tool_kind(name: str) -> str:
         return "collector"
     if name in HEADLESS_REVERSE_TOOLS:
         return "headless_reverse"
+    if name == "x64dbg":
+        return "debugger"
     if name in STATIC_EXTERNAL_TOOLS:
         return "static_external"
     return "external"

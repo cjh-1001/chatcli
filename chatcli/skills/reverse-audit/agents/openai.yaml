@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reverse Audit"
+  short_description: "Audit reverse-engineering claims and evidence"
+  default_prompt: "Use $reverse-audit to review reverse-engineering evidence, validate claims, and correct unsupported conclusions."

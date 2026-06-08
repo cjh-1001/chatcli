@@ -22,11 +22,14 @@ $dirs = @(
     "C:\analysis\cases",
     "C:\analysis\outbox",
     "C:\analysis\rules",
-    "C:\analysis\tmp"
+    "C:\analysis\tmp",
+    "C:\samples"
 )
 foreach ($dir in $dirs) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
+[Environment]::SetEnvironmentVariable("CHATCLI_AGENT_DIR", "C:\analysis", "Machine")
+$env:CHATCLI_AGENT_DIR = "C:\analysis"
 
 Write-Host "[3/4] Configuring Guest Agent token..." -ForegroundColor Yellow
 $token = [Environment]::GetEnvironmentVariable("CHATCLI_GUEST_AGENT_TOKEN", "Machine")
@@ -50,6 +53,12 @@ Write-Host "  $agent" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Start command:" -ForegroundColor White
 Write-Host "  py -3 $agent --host 0.0.0.0 --port 8443" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Default sample drop directory:" -ForegroundColor White
+Write-Host "  C:\samples" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Natural-language batch example from the chatcli client:" -ForegroundColor White
+Write-Host "  把腾讯云服务器 C:\samples 文件夹里的恶意样本依次分析" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Token for chatcli client config:" -ForegroundColor White
 Write-Host "  $token" -ForegroundColor Yellow

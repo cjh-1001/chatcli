@@ -17,6 +17,7 @@ COMMAND_DEFS = [
     ("Analyze", "/crack <exe> [goal]", "Shortcut for crackme validation audit"),
     ("Analyze", "/patch <exe> [goal]", "Shortcut for binary patch audit"),
     ("Analyze", "/malware <exe> [goal]", "Shortcut for static behavior triage plan"),
+    ("Analyze", "/remote-batch <remote_dir|--sample path...> [--dynamic]", "Sequential Tencent Cloud sample analysis"),
     ("Analyze", "/malware-share [sample] [--report path] [--include-sample]", "Create a defensive sample-sharing package"),
     ("Session", "/plan <task>", "Explore and produce a plan"),
     ("Session", "/session", "Open session picker"),
@@ -36,6 +37,7 @@ COMMAND_DEFS = [
     ("Window", "/child show <name>", "Show child status and output tail"),
     ("Window", "/child summarize [name]", "Summarize child results in the main window"),
     ("Window", "/child wait [name|all]", "Wait for child tasks and refresh summaries"),
+    ("Window", "/dashboard [case_id] [--refresh seconds] [--no-probes]", "Live remote dynamic monitor dashboard"),
     ("Settings", "/doctor", "Check local chatcli health"),
     ("Settings", "/auto-requests list", "Show queued internal automation requests"),
     ("Settings", "/permissions", "Show or change current permission mode"),
@@ -105,6 +107,11 @@ SUBCOMMANDS = {
         ("wait", "Wait for running child tasks"),
         ("close", "Close an idle child window"),
     ],
+    "/dashboard": [
+        ("--case", "Monitor a specific remote case ID"),
+        ("--refresh", "Set refresh interval in seconds"),
+        ("--no-probes", "Disable heavier process/network probes"),
+    ],
     "/checkpoint": [
         ("list", "List backups"),
         ("restore", "Restore a backup"),
@@ -139,6 +146,16 @@ SUBCOMMANDS = {
         ("--include-sample", "Include sample bytes as a quarantine artifact"),
         ("--no-redact-paths", "Do not redact local user paths in text artifacts"),
         ("--no-redact-secrets", "Do not redact obvious secrets in text artifacts"),
+    ],
+    "/remote-batch": [
+        ("--sample", "Add an explicit remote sample path"),
+        ("--pattern", "Remote directory filename pattern"),
+        ("--recursive", "Scan remote directory recursively"),
+        ("--dynamic", "Enable remote dynamic analysis"),
+        ("--static-only", "Run static and verify only"),
+        ("--dry-run", "Use Guest Agent dry_run mode"),
+        ("--output-dir", "Download results to a local directory"),
+        ("--continue-on-failure", "Continue after a failed sample"),
     ],
 }
 

@@ -575,7 +575,7 @@ C:\analysis\
 - `built_in_static`：服务端内置静态能力，例如 `binary_inspect`、`strings`。
 - `headless_reverse`：Headless 逆向工具，例如 `IDA/idat`、`Ghidra analyzeHeadless`。
 - `static_external`：独立静态分析程序，例如 `diec`、`yara`、`exiftool`、`upx`。
-- `collector`：动态/网络采集工具，例如 `dumpcap`、`tshark`、`sysmon`、`procmon`。
+- `collector`：动态/网络采集工具，例如 `dumpcap`、`tshark`、`zeek`、`suricata`、`sysmon`、`procmon`。
 - `external`：独立外部程序，例如 `diec`、`powershell`、`wevtutil`。
 - `analysis_config`：分析配置，例如 YARA 规则路径。
 
@@ -584,7 +584,9 @@ C:\analysis\
 ```powershell
 $env:CHATCLI_TOOL_TSHARK="C:\Program Files\Wireshark\tshark.exe"
 $env:CHATCLI_TOOL_DUMPCAP="C:\Program Files\Wireshark\dumpcap.exe"
-$env:CHATCLI_TOOL_SYSMON="C:\Sysmon\Sysmon64.exe"
+$env:CHATCLI_TOOL_SYSMON="C:\Program Files\reverseTools\Sysmon.exe"
+$env:CHATCLI_TOOL_ZEEK="C:\Tools\Zeek\bin\zeek.exe"
+$env:CHATCLI_TOOL_SURICATA="C:\Program Files\Suricata\suricata.exe"
 $env:CHATCLI_TOOL_DIEC="C:\Tools\diec.exe"
 $env:CHATCLI_YARA_RULES="C:\rules\index.yar"
 $env:IDA_PATH="C:\Program Files\IDA Professional 9.0\idat.exe"
@@ -711,9 +713,164 @@ outbox/<case_id>/verify/server_status_after.json
 
 其中包含进程、网络连接、服务、计划任务和近期系统事件等快照，用来辅助判断服务器是否出现异常迹象。
 
-> 注意：动态采集器目前是接口和结果槽位，后续需要继续实现 Sysmon、PCAP/TShark、Zeek/Suricata 等实际采集逻辑。现在的远程接口已经能承载这些结果，目录预期是 `outbox/<case_id>/dynamic/`。
+> 注意：动态采集器会按 `dynamic_config.collectors` 启用 Procmon、PCAP/TShark、Sysmon、Zeek、Suricata 等能力；未安装或不可用的工具会记录在 `dynamic/dynamic_status.json`，不会阻断其他可用采集器。
 
-### 5. 查看状态和下载结果
+### 5. 动态监控表盘
+
+监控表盘不需要单独部署第二个服务；它复用腾讯云服务器上的 Guest Agent。开启方式是：
+
+1. 在腾讯云服务器启动 Guest Agent：
+
+```powershell
+$env:CHATCLI_AGENT_DIR="C:\analysis"
+$env:CHATCLI_GUEST_AGENT_TOKEN="<token>"
+py -3 C:\chatcli-server\chatcli_guest_agent.py --host 0.0.0.0 --port 8443
+```
+
+2. 在本机配置连接：
+
+```powershell
+$env:CHATCLI_REMOTE_URL="http://<腾讯云公网IP>:8443"
+$env:CHATCLI_GUEST_AGENT_TOKEN="<token>"
+```
+
+3. 运行远端分析后，在 chatcli 交互模式打开表盘：
+
+```text
+/dashboard
+/dashboard case-xxxx
+/dashboard case-xxxx --refresh 2
+/dashboard case-xxxx --no-probes
+```
+
+表盘会轮询：
+
+```text
+GET /api/v1/health
+GET /api/v1/cases
+GET /api/v1/monitor/snapshot?case_id=<case>&probes=true
+```
+
+显示内容包括远端健康状态、case 状态、动态采集状态、PCAP 字节数、collector 事件数量、进程/网络/注册表/计划任务/文件活动 observer 摘要，以及本地 `/observe` 子观察器状态。
+
+如果只想让模型拉一次快照，可以用：
+
+```powershell
+chatcli "用 remote_guest monitor 查看 case_id=case-xxxx 的动态监控状态"
+```
+
+### 6. 流量采集和 Procmon 调用
+
+流量采集和 Procmon 都通过 Guest Agent 的动态分析 job 接口启动，不是单独的 `procmon` endpoint。调用方式是在 `analysis_plan` 里启用动态分析，并在 `dynamic_config.collectors` 里指定采集器：
+
+```powershell
+chatcli "用 remote_guest prepare，sample_path=C:\samples\a.exe，analysis_plan={static:true,ida:true,dynamic:true,network:true,verify:true}，dynamic_config={timeout_seconds:300,collectors:[pcap,procmon,tshark],network_interface:'1'}"
+chatcli "用 remote_guest run 运行上一步的 case_id，mode=real"
+```
+
+也可以用自然语言：
+
+```text
+对腾讯云服务器 C:\samples\a.exe 做静态和动态分析，开启 Procmon 和流量采集
+```
+
+服务端需要能找到这些工具：
+
+```powershell
+$env:CHATCLI_TOOL_PROCMON="C:\Tools\Procmon64.exe"
+$env:CHATCLI_TOOL_DUMPCAP="C:\Program Files\Wireshark\dumpcap.exe"
+$env:CHATCLI_TOOL_TSHARK="C:\Program Files\Wireshark\tshark.exe"
+$env:CHATCLI_TOOL_SYSMON="C:\Program Files\reverseTools\Sysmon.exe"
+$env:CHATCLI_TOOL_ZEEK="C:\Tools\Zeek\bin\zeek.exe"
+$env:CHATCLI_TOOL_SURICATA="C:\Program Files\Suricata\suricata.exe"
+```
+
+先检查远端工具状态：
+
+```powershell
+chatcli "用 remote_guest tools 检查远端 procmon、dumpcap、tshark、sysmon、zeek、suricata 是否可用"
+```
+
+动态 runner 的顺序是：
+
+```text
+dumpcap 启动 -> Procmon 启动 -> 执行样本 -> 停止 Procmon/dumpcap -> Procmon/Sysmon 导出 -> tshark/Zeek/Suricata 解析 PCAP
+```
+
+结果会写入：
+
+```text
+dynamic/dynamic_status.json
+dynamic/network.pcapng
+dynamic/network_summary.txt
+dynamic/dns.txt
+dynamic/http.txt
+dynamic/conversations.txt
+dynamic/tls_sni.txt
+dynamic/tcp_syn.txt
+dynamic/targeted_network_iocs.txt
+dynamic/procmon.pml
+dynamic/procmon.csv
+dynamic/targeted_process_tree.txt
+dynamic/targeted_file_activity.txt
+dynamic/targeted_registry_activity.txt
+dynamic/targeted_persistence.txt
+dynamic/sysmon.evtx
+dynamic/sysmon.txt
+dynamic/zeek/
+dynamic/suricata/
+```
+
+### 7. 远端目录批量顺序分析
+
+如果样本已经放在腾讯云服务器目录里，可以用独立的批处理工作流按文件名顺序逐个分析。这个流程调用 `remote_batch_analyze` 工具：每个样本都会先 `prepare`、再 `run`、等待完成并下载结果，然后才进入下一个样本；它不会修改 chatcli 原本的模型工具轮询逻辑。
+
+静态优先：
+
+```powershell
+chatcli "/remote-batch C:\samples --pattern *.exe --output-dir .chatcli\remote_results"
+```
+
+需要动态分析时显式开启：
+
+```powershell
+chatcli "/remote-batch C:\samples --pattern *.exe --dynamic --output-dir .chatcli\remote_results"
+```
+
+也可以指定多个远端样本路径：
+
+```powershell
+chatcli "/remote-batch --sample C:\samples\a.exe --sample C:\samples\b.exe --dynamic"
+```
+
+常用选项：
+
+```text
+--recursive              递归扫描远端目录
+--max N                  最多处理 N 个样本
+--dry-run                使用 Guest Agent dry_run
+--continue-on-failure    单个样本失败后继续处理后续样本
+--no-download            不自动下载结果
+--no-wait                提交 case 后立即返回，不等待远端分析完成
+--run-timeout N          提交 run 请求的 HTTP 超时秒数，默认 60
+```
+
+底层工具也可以直接由模型调用：`remote_batch_analyze(sample_dir="C:\\samples", pattern="*.exe", analysis_plan={...})`。
+
+如果交互里感觉 `remote_batch_analyze` 卡住，优先使用：
+
+```powershell
+chatcli "/remote-batch C:\samples --pattern *.exe --dynamic --no-wait"
+```
+
+它会返回每个样本的 `case_id`。之后用：
+
+```powershell
+chatcli "用 remote_guest status 查看 case_id=case-xxxx"
+chatcli "用 remote_guest download 下载 case_id=case-xxxx 的结果"
+```
+
+### 8. 查看状态和下载结果
 
 运行后查询 case：
 
@@ -740,7 +897,7 @@ chatcli "用 remote_guest download 下载 case_id=case-xxxx 的结果"
 chatcli "读取 .chatcli/remote_results/case-xxxx，分析 static、dynamic、network、verify 结果并输出结论"
 ```
 
-### 6. 分析后检查服务器受攻击情况
+### 9. 分析后检查服务器受攻击情况
 
 可以随时采集远程服务器安全快照：
 

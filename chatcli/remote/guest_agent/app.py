@@ -15,7 +15,11 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import csv
+import io
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +32,8 @@ from .auth import TOKEN_ENV, load_required_token, verify_bearer_token
 
 DEFAULT_WORKDIR = Path(os.environ.get("CHATCLI_AGENT_DIR", "C:/analysis"))
 DEFAULT_CASES_DIR = DEFAULT_WORKDIR / "cases"
-
-app = FastAPI(title="chatcli-guest-agent", version="0.1.0")
+EXEC_STDOUT_LIMIT = 60000
+EXEC_STDERR_LIMIT = 12000
 
 # ── Token loading (env vars only, never config files) ────────────
 
@@ -37,6 +41,38 @@ try:
     _AGENT_TOKEN = load_required_token()
 except Exception:
     _AGENT_TOKEN = ""
+
+
+async def _startup_check():
+    if not _AGENT_TOKEN:
+        print(
+            f"\n*** WARNING: {TOKEN_ENV} is not set. "
+            "All endpoints requiring auth will fail. ***\n"
+        )
+    DEFAULT_CASES_DIR.mkdir(parents=True, exist_ok=True)
+    (DEFAULT_WORKDIR / "outbox").mkdir(parents=True, exist_ok=True)
+    print(f"Cases dir: {DEFAULT_CASES_DIR}")
+    print("Agent ready.")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    await _startup_check()
+    yield
+
+
+app = FastAPI(title="chatcli-guest-agent", version="0.1.0", lifespan=_lifespan)
+
+
+def _truncate_text(value: Any, limit: int) -> tuple[str, bool, int]:
+    text = "" if value is None else str(value)
+    if len(text) <= limit:
+        return text, False, len(text)
+    return (
+        text[:limit] + f"\n[TRUNCATED: output was {len(text)} chars, limit {limit}]",
+        True,
+        len(text),
+    )
 
 
 def _authorize(authorization: str | None = Header(None)) -> None:
@@ -108,6 +144,50 @@ def _write_job_file(case_id: str, updates: dict[str, Any] | None = None) -> dict
     job_path = case_dir / "job.json"
     job_path.write_text(json.dumps(job, indent=2, ensure_ascii=False), encoding="utf-8")
     return job
+
+
+def _run_case_subprocess(case_id: str, case_dir: Path, mode: str) -> dict[str, Any]:
+    """Run job_runner and persist final case state."""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "chatcli.remote.job_runner",
+                str(case_dir),
+                "--mode", mode,
+                "--outbox", str(case_dir.parent.parent / "outbox"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+        )
+
+        if result.returncode == 0:
+            _write_case_state(case_id, {
+                "status": "done",
+                "completed_at": time.time(),
+            })
+            return {"case_id": case_id, "status": "done"}
+
+        error = result.stderr[:500] if result.stderr else f"exit={result.returncode}"
+        _write_case_state(case_id, {
+            "status": "failed",
+            "error": error,
+        })
+        return {"case_id": case_id, "status": "failed", "error": error}
+
+    except subprocess.TimeoutExpired:
+        _write_case_state(case_id, {"status": "timeout"})
+        return {"case_id": case_id, "status": "timeout"}
+    except Exception as exc:
+        _write_case_state(case_id, {"status": "failed", "error": str(exc)})
+        raise
+
+
+def _run_case_subprocess_background(case_id: str, case_dir: Path, mode: str) -> None:
+    try:
+        _run_case_subprocess(case_id, case_dir, mode)
+    except Exception:
+        pass
 
 
 def _run_probe(command: str, timeout: int = 5) -> dict[str, Any]:
@@ -327,6 +407,57 @@ def _recent_file_activity(case_id: str = "", limit: int = 30) -> list[dict[str, 
     return sorted(files, key=lambda item: item["mtime"], reverse=True)[:limit]
 
 
+def _process_metrics(process_probe: dict[str, Any] | None) -> dict[str, Any]:
+    probe = process_probe or {}
+    if not probe:
+        return {"status": "not_collected", "count": 0, "sample": []}
+    if probe.get("exit_code") != 0:
+        return {"status": "error", "count": 0, "sample": [], "error": (probe.get("stderr") or "")[:300]}
+
+    stdout = probe.get("stdout") or ""
+    sample: list[dict[str, Any]] = []
+    if os.name == "nt":
+        for row in csv.reader(io.StringIO(stdout)):
+            if len(row) < 5:
+                continue
+            name, pid, session_name, session_id, memory = row[:5]
+            try:
+                memory_kb = int("".join(ch for ch in memory if ch.isdigit()) or "0")
+            except ValueError:
+                memory_kb = 0
+            sample.append({
+                "name": name,
+                "pid": pid,
+                "session": session_name,
+                "session_id": session_id,
+                "memory_kb": memory_kb,
+            })
+    else:
+        for line in stdout.splitlines()[1:]:
+            parts = line.split(None, 10)
+            if len(parts) < 11:
+                continue
+            sample.append({
+                "user": parts[0],
+                "pid": parts[1],
+                "cpu_percent": parts[2],
+                "memory_percent": parts[3],
+                "command": parts[10],
+            })
+
+    top_memory = sorted(
+        [item for item in sample if isinstance(item.get("memory_kb"), int)],
+        key=lambda item: item.get("memory_kb", 0),
+        reverse=True,
+    )[:10]
+    return {
+        "status": "ok",
+        "count": len(sample),
+        "sample": sample[:25],
+        "top_memory": top_memory,
+    }
+
+
 def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[str, Any]:
     probes: dict[str, Any] = {}
     if include_probes:
@@ -349,6 +480,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
     pcap_path = Path(dynamic_status.get("outputs", {}).get("network_pcap", "")) if dynamic_status else Path()
     pcap_bytes = pcap_path.stat().st_size if pcap_path.is_file() else 0
     file_activity = _recent_file_activity(case_id)
+    process_metrics = _process_metrics(probes.get("processes"))
 
     def probe_state(name: str) -> str:
         if name not in probes:
@@ -360,7 +492,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
             "name": "process-observer",
             "role": "process_tree",
             "status": probe_state("processes"),
-            "summary": "Process snapshot collected; use raw probe output for PID/name review.",
+            "summary": f"Process snapshot collected; processes={process_metrics.get('count', 0)}.",
         },
         {
             "name": "network-observer",
@@ -399,6 +531,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
             "pcap_bytes": pcap_bytes,
             "active": dynamic_status.get("status") in {"collecting", "collected"},
         },
+        "process_metrics": process_metrics,
         "file_activity": file_activity,
         "observer_agents": observer_agents,
         "probes": probes,
@@ -478,10 +611,16 @@ async def exec_command(
             timeout=timeout,
             cwd=workdir if Path(workdir).is_dir() else str(DEFAULT_WORKDIR),
         )
+        stdout, stdout_truncated, stdout_chars = _truncate_text(result.stdout, EXEC_STDOUT_LIMIT)
+        stderr, stderr_truncated, stderr_chars = _truncate_text(result.stderr, EXEC_STDERR_LIMIT)
         return {
             "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "stdout_chars": stdout_chars,
+            "stderr_chars": stderr_chars,
             "elapsed_ms": int((time.time() - started) * 1000),
         }
     except subprocess.TimeoutExpired:
@@ -612,38 +751,18 @@ async def run_analysis(
 
     _write_case_state(case_id, {"status": "running", "started_at": time.time()})
 
-    # Run job_runner as subprocess
-    try:
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "chatcli.remote.job_runner",
-                str(case_dir),
-                "--mode", mode,
-                "--outbox", str(case_dir.parent.parent / "outbox"),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=1800,
+    if bool(body.get("background", False)):
+        thread = threading.Thread(
+            target=_run_case_subprocess_background,
+            args=(case_id, case_dir, mode),
+            daemon=True,
         )
+        thread.start()
+        return {"case_id": case_id, "status": "running", "background": True}
 
-        if result.returncode == 0:
-            _write_case_state(case_id, {
-                "status": "done",
-                "completed_at": time.time(),
-            })
-            return {"case_id": case_id, "status": "done"}
-        else:
-            _write_case_state(case_id, {
-                "status": "failed",
-                "error": result.stderr[:500] if result.stderr else f"exit={result.returncode}",
-            })
-            return {"case_id": case_id, "status": "failed", "error": result.stderr[:500]}
-
-    except subprocess.TimeoutExpired:
-        _write_case_state(case_id, {"status": "timeout"})
-        return {"case_id": case_id, "status": "timeout"}
+    try:
+        return _run_case_subprocess(case_id, case_dir, mode)
     except Exception as exc:
-        _write_case_state(case_id, {"status": "failed", "error": str(exc)})
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -744,18 +863,3 @@ async def list_cases(
         })
 
     return {"cases": cases, "total": len(cases)}
-
-
-# ── Startup check ────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def _startup_check():
-    if not _AGENT_TOKEN:
-        print(
-            f"\n*** WARNING: {TOKEN_ENV} is not set. "
-            "All endpoints requiring auth will fail. ***\n"
-        )
-    DEFAULT_CASES_DIR.mkdir(parents=True, exist_ok=True)
-    (DEFAULT_WORKDIR / "outbox").mkdir(parents=True, exist_ok=True)
-    print(f"Cases dir: {DEFAULT_CASES_DIR}")
-    print(f"Agent ready.")

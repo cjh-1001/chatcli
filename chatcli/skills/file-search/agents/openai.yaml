@@ -1,0 +1,4 @@
+interface:
+  display_name: "File Search"
+  short_description: "Search files and content with evidence reports"
+  default_prompt: "Use $file-search to find matching files, content, metadata, or patterns and report the evidence."

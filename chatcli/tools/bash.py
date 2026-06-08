@@ -4,6 +4,21 @@ import subprocess
 import time
 from .base import Tool, ToolResult, get_workspace
 
+STDOUT_CONTENT_LIMIT = 60000
+STDERR_CONTENT_LIMIT = 12000
+
+
+def _truncate_text(value: str, limit: int) -> tuple[str, bool, int]:
+    text = "" if value is None else str(value)
+    size = len(text)
+    if size <= limit:
+        return text, False, size
+    return (
+        text[:limit] + f"\n[TRUNCATED: command output was {size} chars, showing first {limit}]",
+        True,
+        size,
+    )
+
 
 class BashTool(Tool):
     name = "bash"
@@ -46,12 +61,14 @@ class BashTool(Tool):
                 errors="replace",
             )
             elapsed = time.monotonic() - start
+            stdout, stdout_truncated, stdout_chars = _truncate_text(proc.stdout or "", STDOUT_CONTENT_LIMIT)
+            stderr, stderr_truncated, stderr_chars = _truncate_text(proc.stderr or "", STDERR_CONTENT_LIMIT)
 
             content_parts = []
-            if proc.stdout:
-                content_parts.append(proc.stdout.strip())
-            if proc.stderr:
-                content_parts.append(f"[stderr]\n{proc.stderr.strip()}")
+            if stdout:
+                content_parts.append(stdout.strip())
+            if stderr:
+                content_parts.append(f"[stderr]\n{stderr.strip()}")
             if not content_parts:
                 content_parts.append("(no output)")
 
@@ -65,6 +82,10 @@ class BashTool(Tool):
                 metadata={
                     "exit_code": proc.returncode,
                     "elapsed_ms": int(elapsed * 1000),
+                    "stdout_truncated": stdout_truncated,
+                    "stderr_truncated": stderr_truncated,
+                    "stdout_chars": stdout_chars,
+                    "stderr_chars": stderr_chars,
                 },
             )
         except subprocess.TimeoutExpired:

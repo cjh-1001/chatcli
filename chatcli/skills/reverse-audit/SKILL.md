@@ -32,11 +32,14 @@ Prefer `malware-triage` when the user only provides a suspicious sample and asks
 
 Read only the reference needed for the current route:
 
+- `../common/references/tool-registry.md`: use when tool names are unclear or
+  when checking whether a name is a registered ChatCLI tool.
 - `references/audit-checklist.md`: use for report review, claim validation, confidence correction, ATT&CK/IOC/detection audit, or static-vs-dynamic consistency.
 - `references/rewrite-templates.md`: use before rewriting overclaimed report language or producing final safer wording.
 - `references/technique-map.md`: use when choosing the next reverse technique from file/code/data/API/packer signals.
 - `references/competition-playbook.md`: use for authorized local CTF/crackme, validation logic, patch audit, solver, anti-debug, anti-VM, custom packer, API hashing, or local instrumentation routes.
 - `references/github-reverse-patterns.md`: use when common routes stall or the sample shows advanced patterns such as custom VM, MBA, TLS init, direct syscall, IAT encryption, layered integrity guards, or runtime-only values.
+- `../x64dbg-runtime-analysis/SKILL.md`: use when the user explicitly asks for x64dbg, debugger breakpoints, runtime string extraction, decrypt-function hooks, or local isolated debugger instrumentation.
 
 Do not load all references by default.
 
@@ -250,12 +253,17 @@ Gap table:
 
 Use ChatCLI tools when available:
 
-- Identity/static triage: `binary_inspect`, `external_static`, `reverse_text`.
-- Search/verification: `binary_search`, `binary_formats`, focused `read`.
-- Obfuscation/data: `data_obfuscation`, `encoded_strings`, reverse data tools.
-- IDA/Ghidra: `ida`, `ida_focus`, `ida_script`, `ghidra`, `angr_triage`.
-- Claim validation: `behavior_validator`, `behavior_confidence`, `behavior_requirements`, `evidence_graph`, `attack_chain`, `attack_technique`.
-- IOC/rule quality: `ioc_quality`, `detection_lint`.
+- Identity/static triage: `binary_inspect`, `external_static_analyze`,
+  `encoded_string_extract`.
+- Search/verification: `binary_find`, `binary_hexdump`, focused `read_file`.
+- Obfuscation/data: `obfuscated_data_map`, `encoded_string_extract`,
+  `reverse_evidence_map`, `reverse_technique_map`.
+- IDA/Ghidra: `ida_probe`, `ida_analyze`, `ida_focus_decompile`,
+  `ida_deobfuscate`, `ghidra_probe`, `ghidra_analyze`, `angr_triage`.
+- Claim validation: `behavior_capability_map`, `command_capability_map`,
+  `behavior_claim_validator`, `behavior_coverage_matrix`, `evidence_graph`,
+  `attack_chain_builder`, `attack_technique_mapper`.
+- IOC/rule quality: `ioc_quality_classifier`, `detection_rule_lint`.
 - Patching: `binary_patch` only for authorized local copied artifacts with verified old bytes.
 
 If a tool output is unavailable or inconclusive, continue with the next best evidence and state the limitation.

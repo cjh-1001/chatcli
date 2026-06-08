@@ -1,24 +1,6 @@
 ---
 name: coding
-description: Phased software engineering workflow for implementing, fixing, refactoring, testing, and verifying code changes. Use for coding tasks such as 修复, 实现, 添加, 重构, 优化, debugging, tests, or any request that changes source files.
-aliases:
-  - implement
-  - code
-triggers:
-  - implement
-  - fix
-  - refactor
-  - optimize
-  - test
-  - debug
-  - feature
-  - source change
-  - 修复
-  - 实现
-  - 添加
-  - 重构
-  - 优化
-  - 测试
+description: Phased software engineering workflow for implementing, fixing, refactoring, testing, and verifying code changes. Use for coding tasks such as implement, fix, refactor, optimize, test, debug, feature work, source changes, 修复, 实现, 添加, 重构, 优化, 测试, or any request that changes source files.
 ---
 
 # Coding Skill

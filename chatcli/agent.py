@@ -95,6 +95,7 @@ class Agent(AgentSessionMixin, CompressionMixin, AgentToolMixin, AgentOutputMixi
         self._compression_events: list[dict] = []
         self._ida_mcp_prepare_attempted = False
         self._ida_mcp_dynamic_tools = 0
+        self._current_turn_requires_evidence = False
         self._init_system_prompt()
         # Crash detection: mark session as running
         from .checkpoint import mark_running
@@ -290,8 +291,37 @@ The user's request follows below.
         _re.IGNORECASE,
     )
 
+    _EVIDENCE_INTENSIVE_TASK_RE = _re.compile(
+        r"(?:"
+        r"\b(?:reverse|malware|binary|sample|ioc|yara|capa|ida|ghidra|"
+        r"ctf|crackme|decompil|disassembl|debug|bug|error|traceback|"
+        r"exception|failing|test|build|fix|implement|modify|edit|refactor|"
+        r"review|audit|security|vulnerab|exploit|investigat|diagnos|repo|"
+        r"codebase|project|command|execute|run|grep)\b|"
+        r"\b(?:read|search)\s+(?:file|code|repo|project|path)\b|"
+        r"(?:^|\s)/(?:malware|work|init|plan|tools)\b|"
+        r"(?:[A-Za-z]:\\|(?:\.{1,2}[\\/]|[\\/])[^\s]+)|"
+        r"\.(?:exe|dll|sys|bin|elf|so|dylib|apk|jar|class|py|js|ts|tsx|jsx|"
+        r"go|rs|java|c|cc|cpp|h|hpp|cs|php|rb|sh|ps1|bat|cmd|json|ya?ml|"
+        r"toml|ini|cfg|md|txt|log)\b|"
+        r"(?:逆向|恶意|样本|二进制|可执行|木马|病毒|静态|动态|行为|漏洞|"
+        r"安全|审计|检测|调试|报错|错误|异常|修复|解决|实现|修改|编辑|"
+        r"重构|测试|运行|执行|读取|搜索|项目|仓库|代码|文件|路径|日志|"
+        r"报告|排查|定位)"
+        r")",
+        _re.IGNORECASE,
+    )
+
+    def _requires_evidence_intensive_work(self, task: str | None = None) -> bool:
+        """Return True for tasks where automatic tool-depth guards are useful."""
+        text = (task or "").strip()
+        if not text:
+            return False
+        return bool(self._EVIDENCE_INTENSIVE_TASK_RE.search(text))
+
     def _should_self_correct(self, final_text: str, exhausted: bool,
-                              correction_round: int, tools_used: int = 0) -> bool:
+                              correction_round: int, tools_used: int = 0,
+                              original_task: str | None = None) -> bool:
         """Decide whether the model needs another self-correction round."""
         if not self.config.self_correction:
             return False
@@ -326,6 +356,12 @@ The user's request follows below.
         # skip self-correction. Long reports with many sections, IOCs,
         # and detection rules are unlikely to be incomplete.
         if len(text) > 2000 and self._COMPLETE_REPORT_RE.search(text):
+            return False
+
+        # The heuristics below are intentionally strict and tool-oriented.
+        # Apply them only to tasks that need evidence gathering, such as code
+        # changes, debugging, security review, and binary/malware analysis.
+        if not self._requires_evidence_intensive_work(original_task):
             return False
 
         # ── Shallow analysis detection ──────────────────────────────
@@ -384,7 +420,11 @@ The user's request follows below.
 
         # Detect shallow analysis — few tools + short answer
         depth_hint = ""
-        if tools_used < 3 and len(last) < 400:
+        if (
+            self._requires_evidence_intensive_work(original_task)
+            and tools_used < 3
+            and len(last) < 400
+        ):
             depth_hint = (
                 f"\n**NOTE:** You have only used {tools_used} tool(s) so far. "
                 "Before drawing conclusions, use more tools to gather and "
@@ -548,9 +588,10 @@ The user's request follows below.
         Returns (final_text, exhausted) where exhausted=True means
         max_tool_rounds was reached before the model produced a final answer.
 
-        Prevents premature exit: if the model tries to give a final answer
-        before using at least min_tool_rounds tools, it gets pushed to explore
-        more (up to 2 consecutive pushes before giving up).
+        For evidence-intensive tasks, prevents premature exit: if the model
+        tries to give a final answer before using at least min_tool_rounds
+        tools, it gets pushed to explore more. Normal conversation can finish
+        without forced tool use.
         """
         self._prepare_ida_mcp_tools()
         tool_schemas = self.tools.to_schemas()
@@ -558,6 +599,7 @@ The user's request follows below.
         tools_used = 0
         no_tool_streak = 0  # consecutive responses without tool calls
         _soft_cap_warned = False  # only warn once when approaching max rounds
+        requires_evidence = bool(getattr(self, "_current_turn_requires_evidence", False))
 
         for round_num in range(self.config.max_tool_rounds):
             if self.debug:
@@ -627,7 +669,7 @@ The user's request follows below.
                 # Allow up to 2 consecutive "no" answers before accepting
                 # (prevents infinite loops for genuinely simple queries).
                 min_tools = getattr(self.config, "min_tool_rounds", 5)
-                if tools_used < min_tools and no_tool_streak < 2:
+                if requires_evidence and tools_used < min_tools and no_tool_streak < 2:
                     no_tool_streak += 1
                     self._history.append({
                         "role": "assistant",
@@ -710,6 +752,9 @@ The user's request follows below.
         tokens_before = dict(self._total_tokens)
         tools_before = self._tool_calls_total
         original_message = user_message
+        self._current_turn_requires_evidence = self._requires_evidence_intensive_work(
+            original_message
+        )
         self._history.append({"role": "user", "content": user_message})
         self._auto_save()
 
@@ -735,7 +780,11 @@ The user's request follows below.
 
             # Check if we should self-correct
             needs_correction = self._should_self_correct(
-                final_text, exhausted, correction_round, tools_used
+                final_text,
+                exhausted,
+                correction_round,
+                tools_used,
+                original_message,
             )
             if needs_correction and correction_round < max_correction_rounds - 1:
                 self_prompt = self._build_self_correction_prompt(

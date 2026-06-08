@@ -4,6 +4,11 @@ Use this map to choose the next reverse-engineering technique from observed
 signals. The main window should use this as a routing map; detailed function work
 can be delegated to child windows.
 
+For goal-to-tool-chain selection, first consult
+`../../common/references/tool-registry.md#functional-tool-chains`; then use this
+file to choose the smallest reverse technique that can produce the missing
+evidence.
+
 ## Selection Loop
 
 1. Identify signals:

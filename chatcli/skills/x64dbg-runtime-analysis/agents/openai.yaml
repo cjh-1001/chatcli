@@ -1,0 +1,4 @@
+interface:
+  display_name: "x64dbg Runtime Analysis"
+  short_description: "Generate ranked x64dbg breakpoint plans from ChatCLI static artifacts"
+  default_prompt: "Use $x64dbg-runtime-analysis for authorized x64dbg debugging, coverage-mode breakpoint planning, runtime string/config extraction scripts, and safe local-lab dynamic reverse-analysis planning."

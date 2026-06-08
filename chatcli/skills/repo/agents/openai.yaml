@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Audit"
+  short_description: "Audit repos, diffs, secrets, and supply-chain risk"
+  default_prompt: "Use $repo to inspect this repository or diff for secrets, risky changes, suspicious files, and remediation."

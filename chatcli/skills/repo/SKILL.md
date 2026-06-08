@@ -1,6 +1,14 @@
 ---
 name: repo
-description: Use this skill when the user asks to inspect, review, audit, summarize, or security-check a Git repository, source tree, commit range, branch, pull request, patch, diff, file list, dependency manifest, CI/CD workflow, or suspicious repository content. This skill focuses on defensive repository auditing: secrets, risky commits, suspicious scripts, binary artifacts, dependency and supply-chain risk, CI/CD exposure, unsafe configuration, and evidence-backed remediation. It must not execute repository code or reveal secrets.
+description: >-
+  Use this skill when the user asks to inspect, review, audit, summarize, or
+  security-check a Git repository, source tree, commit range, branch, pull
+  request, patch, diff, file list, dependency manifest, CI/CD workflow, or
+  suspicious repository content. This skill focuses on defensive repository
+  auditing: secrets, risky commits, suspicious scripts, binary artifacts,
+  dependency and supply-chain risk, CI/CD exposure, unsafe configuration, and
+  evidence-backed remediation. It must not execute repository code or reveal
+  secrets.
 ---
 
 # Repository Audit Skill

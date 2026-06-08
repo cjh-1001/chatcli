@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import csv
+import io
 import json
 import os
 import platform
@@ -18,22 +20,56 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+try:
+    from chatcli.remote.behavior_hypotheses import (
+        derive_static_behavior_targets as _shared_derive_static_behavior_targets,
+        merge_dynamic_config as _shared_merge_dynamic_config,
+    )
+    from chatcli.remote.procmon_screen import screen_procmon_csv as _shared_screen_procmon_csv
+except Exception:
+    _shared_derive_static_behavior_targets = None
+    _shared_merge_dynamic_config = None
+    _shared_screen_procmon_csv = None
+
 
 BASE_DIR = Path(os.environ.get("CHATCLI_AGENT_DIR", "C:/analysis"))
 CASES_DIR = BASE_DIR / "cases"
+PROBE_STDOUT_LIMIT = 12000
+PROBE_STDERR_LIMIT = 4000
 OUTBOX_DIR = BASE_DIR / "outbox"
 TOKEN_ENV = "CHATCLI_GUEST_AGENT_TOKEN"
 AGENT_TOKEN = os.environ.get(TOKEN_ENV, "").strip()
 
-app = FastAPI(title="chatcli-guest-agent-standalone", version="0.2.0")
+
+async def _startup() -> None:
+    CASES_DIR.mkdir(parents=True, exist_ok=True)
+    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+    inventory = _tool_inventory()
+    available = sum(1 for info in inventory.values() if info.get("available"))
+    print("chatcli standalone Guest Agent")
+    print(f"  Base:  {BASE_DIR}")
+    print(f"  Cases: {CASES_DIR}")
+    print(f"  Tools: {available}/{len(inventory)} available")
+    print(f"  Auth:  {'configured' if AGENT_TOKEN else 'MISSING'}")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    await _startup()
+    yield
+
+
+app = FastAPI(title="chatcli-guest-agent-standalone", version="0.2.0", lifespan=_lifespan)
 
 
 def _auth(authorization: str | None = Header(None)) -> None:
@@ -66,6 +102,648 @@ def _write_state(case_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(case_dir / "case_state.json")
     return state
+
+
+def _write_command_output(output_path: Path, result: subprocess.CompletedProcess[str]) -> None:
+    output_path.write_text(
+        (result.stdout or "") + (("\n[stderr]\n" + result.stderr) if result.stderr else ""),
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
+def _target_values(dynamic_config: dict[str, Any], sample_name: str = "") -> list[str]:
+    targets = dynamic_config.get("validation_targets") if isinstance(dynamic_config, dict) else {}
+    values: list[str] = []
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                add(item)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item)
+            return
+        text = str(value).strip()
+        if text:
+            values.append(text)
+
+    if isinstance(targets, dict):
+        for key in (
+            "network_indicators",
+            "watch_processes",
+            "watch_paths",
+            "watch_registry",
+            "watch_services_tasks",
+            "behaviors",
+        ):
+            add(targets.get(key))
+    add(sample_name)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        key = value.lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(value)
+    return out
+
+
+def _read_text_file(path: Path, limit: int = 500_000) -> str:
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")[:limit]
+
+
+def _matching_lines(text: str, terms: list[str], limit: int = 8) -> list[str]:
+    lowered = [term.lower() for term in terms if term]
+    lines: list[str] = []
+    for line in text.splitlines():
+        low = line.lower()
+        if lowered and not any(term in low for term in lowered):
+            continue
+        clean = line.strip()
+        if clean and clean not in lines:
+            lines.append(clean[:500])
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _extract_domains(text: str, limit: int = 20) -> list[str]:
+    allowed_tlds = {
+        "com", "net", "org", "cn", "io", "co", "info", "biz", "top", "xyz",
+        "dev", "app", "ru", "hk", "tw", "cc", "me", "site", "online", "shop",
+    }
+    noise_domains = {"godebugs.info", "eq.io"}
+    domains: list[str] = []
+    for match in re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", text):
+        low = match.lower().strip(".")
+        if low in noise_domains:
+            continue
+        tld = low.rsplit(".", 1)[-1]
+        if tld not in allowed_tlds:
+            continue
+        if low.endswith((".dll", ".exe", ".pdb", ".local")):
+            continue
+        if low not in domains:
+            domains.append(low)
+        if len(domains) >= limit:
+            break
+    return domains
+
+
+def _extract_ips(text: str, limit: int = 20) -> list[str]:
+    ips: list[str] = []
+    for match in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
+        parts = [int(part) for part in match.split(".") if part.isdigit()]
+        if len(parts) != 4 or any(part > 255 for part in parts):
+            continue
+        if match not in ips:
+            ips.append(match)
+        if len(ips) >= limit:
+            break
+    return ips
+
+
+def _extract_urls(text: str, limit: int = 20) -> list[str]:
+    urls: list[str] = []
+    for match in re.findall(r"https?://[^\s\"'<>]+", text, flags=re.IGNORECASE):
+        value = match.rstrip(").,;]")
+        if value not in urls:
+            urls.append(value)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def _merge_list(target: dict[str, Any], key: str, values: list[str]) -> None:
+    existing = [str(item) for item in target.get(key, []) if str(item)]
+    for value in values:
+        if value and value not in existing:
+            existing.append(value)
+    if existing:
+        target[key] = existing
+
+
+def _merge_network_indicators(targets: dict[str, Any], indicators: dict[str, list[str]]) -> None:
+    current = targets.get("network_indicators")
+    if not isinstance(current, dict):
+        current = {}
+    for key, values in indicators.items():
+        _merge_list(current, key, values)
+    if current:
+        targets["network_indicators"] = current
+
+
+def _merge_dynamic_config(base: dict[str, Any] | None, derived: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base or {})
+    merged_targets = dict(merged.get("validation_targets") or {})
+    for key, values in (derived.get("validation_targets") or {}).items():
+        if key == "network_indicators" and isinstance(values, dict):
+            _merge_network_indicators(merged_targets, values)
+        elif isinstance(values, list):
+            _merge_list(merged_targets, key, [str(item) for item in values])
+        elif values:
+            _merge_list(merged_targets, key, [str(values)])
+    if merged_targets:
+        merged["validation_targets"] = merged_targets
+    if derived.get("static_hypotheses"):
+        merged["static_hypotheses"] = derived["static_hypotheses"]
+    return merged
+
+
+def _derive_static_behavior_targets(outbox: Path, sample_name: str) -> dict[str, Any]:
+    static_dir = outbox / "static"
+    text = "\n".join(
+        _read_text_file(static_dir / name)
+        for name in ("floss.txt", "strings.txt", "capa.json", "diec.txt", "exiftool.txt")
+    )
+    low = text.lower()
+    hypotheses: list[dict[str, Any]] = []
+    targets: dict[str, Any] = {
+        "watch_processes": [sample_name],
+        "watch_paths": [],
+        "watch_registry": [],
+        "watch_services_tasks": [],
+    }
+
+    def merge_targets(dynamic_targets: dict[str, Any]) -> None:
+        for key, values in dynamic_targets.items():
+            if key == "network_indicators" and isinstance(values, dict):
+                _merge_network_indicators(targets, values)
+            elif isinstance(values, list):
+                _merge_list(targets, key, [str(item) for item in values])
+            elif values:
+                _merge_list(targets, key, [str(values)])
+
+    def add_hypothesis(rule: dict[str, Any], dynamic_targets: dict[str, Any], matched_terms: list[str]) -> None:
+        evidence = _matching_lines(text, list(rule["evidence_terms"]), limit=8)
+        if not evidence:
+            evidence = [f"static terms matched: {', '.join(matched_terms)}"]
+        hypotheses.append(
+            {
+                "id": rule["id"],
+                "analysis_family": rule["family"],
+                "behavior": rule["behavior"],
+                "confidence": "hypothesis",
+                "static_evidence": evidence,
+                "dynamic_targets": dynamic_targets,
+            }
+        )
+        merge_targets(dynamic_targets)
+
+    def task_targets() -> dict[str, Any]:
+        names = [
+            (double_quoted or single_quoted or bare).strip()
+            for double_quoted, single_quoted, bare in re.findall(
+                r"(?:/tn|-tn)\s+(?:\"([^\"]+)\"|'([^']+)'|([^\s\"']+))",
+                text,
+                flags=re.IGNORECASE,
+            )
+        ]
+        return {
+            "watch_processes": ["schtasks.exe"],
+            "watch_services_tasks": names or ["schtasks"],
+            "watch_registry": [r"HKLM\Software\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache"],
+        }
+
+    def service_targets() -> dict[str, Any]:
+        names = [
+            item.strip()
+            for item in re.findall(r"\bsc(?:\.exe)?\s+create\s+([^\s\"']+)", text, flags=re.IGNORECASE)
+        ]
+        names.extend(
+            item.strip()
+            for item in re.findall(r"\bNew-Service\s+-Name\s+([^\s\"']+)", text, flags=re.IGNORECASE)
+        )
+        return {
+            "watch_processes": ["sc.exe", "powershell.exe"],
+            "watch_registry": [r"HKLM\System\CurrentControlSet\Services"],
+            "watch_services_tasks": names or ["services"],
+        }
+
+    static_rules = [
+        {
+            "id": "scheduled_task_persistence",
+            "family": "persistence_privilege",
+            "behavior": "计划任务持久化",
+            "match_any": ("schtasks", "taskscheduler", "\\taskcache\\"),
+            "evidence_terms": ("schtasks", "/create", "/query", "TaskCache", "SecurityScript"),
+            "targets": task_targets,
+            "min_matches": 1,
+        },
+        {
+            "id": "run_key_persistence",
+            "family": "persistence_privilege",
+            "behavior": "Run/RunOnce 注册表自启动",
+            "match_any": ("currentversion\\run", "\\runonce"),
+            "evidence_terms": ("CurrentVersion\\Run", "RunOnce", "RegSetValue"),
+            "targets": {
+                "watch_registry": [
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                    r"HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce",
+                ],
+            },
+            "min_matches": 1,
+        },
+        {
+            "id": "service_persistence",
+            "family": "persistence_privilege",
+            "behavior": "服务创建/服务持久化",
+            "match_any": ("createservice", "sc create", "sc.exe create", "new-service"),
+            "evidence_terms": ("CreateService", "sc create", "sc.exe create", "New-Service", "\\Services\\"),
+            "targets": service_targets,
+            "min_matches": 1,
+        },
+        {
+            "id": "startup_folder_persistence",
+            "family": "persistence_privilege",
+            "behavior": "启动目录持久化",
+            "match_any": ("startup", "start menu\\programs\\startup", "shell:startup"),
+            "evidence_terms": ("Startup", "Start Menu\\Programs\\Startup", "shell:startup"),
+            "targets": {
+                "watch_paths": [
+                    r"\Microsoft\Windows\Start Menu\Programs\Startup",
+                    r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup",
+                    r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\Startup",
+                ],
+            },
+            "min_matches": 2,
+        },
+        {
+            "id": "wmi_persistence",
+            "family": "persistence_privilege",
+            "behavior": "WMI 事件订阅持久化",
+            "match_any": ("__eventfilter", "commandlineeventconsumer", "__filtertoconsumerbinding", "wmic /namespace", "root\\subscription"),
+            "evidence_terms": ("__EventFilter", "CommandLineEventConsumer", "__FilterToConsumerBinding", "root\\subscription"),
+            "targets": {
+                "watch_processes": ["wmic.exe", "powershell.exe"],
+                "watch_paths": [r"C:\Windows\System32\wbem"],
+                "watch_services_tasks": ["WMI", "Winmgmt"],
+            },
+            "min_matches": 1,
+        },
+        {
+            "id": "living_off_the_land_execution",
+            "family": "entry_execution",
+            "behavior": "系统工具/脚本解释器执行",
+            "match_any": ("powershell", "cmd.exe", "wscript", "cscript", "mshta", "rundll32", "regsvr32"),
+            "evidence_terms": ("powershell", "cmd.exe", "wscript", "cscript", "mshta", "rundll32", "regsvr32"),
+            "targets": {
+                "watch_processes": [
+                    "powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe",
+                    "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe",
+                ],
+            },
+            "min_matches": 1,
+        },
+        {
+            "id": "payload_dropper",
+            "family": "entry_execution",
+            "behavior": "文件投放/二阶段载荷落地",
+            "match_any": ("writefile", "createfile", "findresource", "loadresource", "appdata", "programdata", "%temp%", "payload", "dropper"),
+            "evidence_terms": ("WriteFile", "CreateFile", "FindResource", "LoadResource", "AppData", "ProgramData", "%TEMP%", "payload", "dropper"),
+            "targets": {"watch_paths": [r"%TEMP%", r"%APPDATA%", r"%PROGRAMDATA%", r"C:\Users\Public"]},
+            "min_matches": 2,
+        },
+        {
+            "id": "process_injection",
+            "family": "defense_evasion_execution",
+            "behavior": "进程注入/远程线程执行",
+            "match_any": ("virtualallocex", "writeprocessmemory", "createremotethread", "ntcreatethreadex", "queueuserapc", "setwindowshookex", "process hollowing"),
+            "evidence_terms": ("VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "NtCreateThreadEx", "QueueUserAPC", "SetWindowsHookEx", "process hollowing"),
+            "targets": {},
+            "min_matches": 2,
+        },
+        {
+            "id": "credential_access",
+            "family": "credential_access",
+            "behavior": "凭据访问/LSASS 转储候选",
+            "match_any": ("lsass", "minidumpwritedump", "sekurlsa", "comsvcs.dll", "procdump"),
+            "evidence_terms": ("lsass", "MiniDumpWriteDump", "sekurlsa", "comsvcs.dll", "procdump"),
+            "targets": {
+                "watch_processes": ["rundll32.exe", "procdump.exe", "taskmgr.exe"],
+                "watch_paths": [r"C:\Windows\Temp", r"C:\Users\Public", r"%TEMP%"],
+            },
+            "min_matches": 1,
+        },
+        {
+            "id": "uac_bypass",
+            "family": "persistence_privilege",
+            "behavior": "UAC 绕过候选",
+            "match_any": ("fodhelper", "computerdefaults", "eventvwr", "sdclt", "delegateexecute", "ms-settings\\shell\\open\\command"),
+            "evidence_terms": ("fodhelper", "computerdefaults", "eventvwr", "sdclt", "DelegateExecute", "ms-settings\\Shell\\Open\\command"),
+            "targets": {
+                "watch_processes": ["fodhelper.exe", "computerdefaults.exe", "eventvwr.exe", "sdclt.exe"],
+                "watch_registry": [
+                    r"HKCU\Software\Classes\ms-settings\Shell\Open\command",
+                    r"HKCU\Software\Classes\mscfile\Shell\Open\command",
+                    r"DelegateExecute",
+                ],
+            },
+            "min_matches": 2,
+        },
+        {
+            "id": "defense_evasion_security_tool_tampering",
+            "family": "defense_evasion_execution",
+            "behavior": "安全工具/防火墙禁用或规避",
+            "match_any": ("set-mppreference", "disableantispyware", "disablerealtimemonitoring", "add-mppreference", "exclusionpath", "netsh advfirewall", "windefend"),
+            "evidence_terms": ("Set-MpPreference", "DisableAntiSpyware", "DisableRealtimeMonitoring", "Add-MpPreference", "ExclusionPath", "netsh advfirewall", "WinDefend"),
+            "targets": {
+                "watch_processes": ["powershell.exe", "netsh.exe", "sc.exe", "reg.exe"],
+                "watch_registry": [
+                    r"HKLM\Software\Microsoft\Windows Defender",
+                    r"HKLM\System\CurrentControlSet\Services\WinDefend",
+                    r"HKLM\System\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy",
+                ],
+                "watch_services_tasks": ["WinDefend", "SecurityHealthService", "firewall"],
+            },
+            "min_matches": 1,
+        },
+        {
+            "id": "network_or_c2_activity",
+            "family": "command_control_exfil",
+            "behavior": "网络连接/C2 候选",
+            "match_any": ("http://", "https://", "winhttp", "internetopen", "internetconnect", "http_send", "httpopenrequest"),
+            "evidence_terms": ("http://", "https://", "WinHttp", "InternetOpen", "InternetConnect", "HttpOpenRequest"),
+            "targets": lambda: {
+                "network_indicators": {
+                    "urls": _extract_urls(text),
+                    "domains": _extract_domains(text),
+                    "ips": _extract_ips(text),
+                }
+            },
+            "min_matches": 1,
+        },
+    ]
+
+    for rule in static_rules:
+        matched_terms = [term for term in rule["match_any"] if term in low]
+        if len(matched_terms) < int(rule.get("min_matches", 1)):
+            continue
+        target_factory = rule["targets"]
+        dynamic_targets = target_factory() if callable(target_factory) else dict(target_factory)
+        add_hypothesis(rule, dynamic_targets, matched_terms)
+
+    payload = {
+        "sample_name": sample_name,
+        "hypotheses": hypotheses,
+        "dynamic_config": {"validation_targets": targets},
+        "static_hypotheses": hypotheses,
+    }
+    static_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(static_dir / "behavior_hypotheses.json", payload)
+    return payload
+
+
+def _tshark_target_filter(dynamic_config: dict[str, Any]) -> str:
+    targets = dynamic_config.get("validation_targets") if isinstance(dynamic_config, dict) else {}
+    if not isinstance(targets, dict):
+        return ""
+    indicators = targets.get("network_indicators") or {}
+    if not isinstance(indicators, dict):
+        return ""
+
+    def quote(value: Any) -> str:
+        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+    terms: list[str] = []
+    for domain in indicators.get("domains") or []:
+        value = quote(domain)
+        terms.extend([
+            f'dns.qry.name contains "{value}"',
+            f'http.host contains "{value}"',
+            f'tls.handshake.extensions_server_name contains "{value}"',
+        ])
+    for ip in indicators.get("ips") or []:
+        if re.fullmatch(r"[0-9a-fA-F:.]+", str(ip).strip()):
+            terms.append(f"ip.addr == {ip}")
+    for port in indicators.get("ports") or []:
+        if str(port).strip().isdigit():
+            terms.append(f"tcp.port == {int(port)} || udp.port == {int(port)}")
+    for path in indicators.get("uri_paths") or []:
+        terms.append(f'http.request.uri contains "{quote(path)}"')
+    for user_agent in indicators.get("user_agents") or []:
+        terms.append(f'http.user_agent contains "{quote(user_agent)}"')
+    for url in indicators.get("urls") or []:
+        value = quote(url)
+        terms.extend([
+            f'http.request.full_uri contains "{value}"',
+            f'http.request.uri contains "{value}"',
+        ])
+    return " || ".join(f"({term})" for term in terms if term)
+
+
+def _screen_procmon_csv(csv_path: Path, dynamic_dir: Path, dynamic_config: dict[str, Any], sample_name: str) -> list[Path]:
+    if not csv_path.is_file():
+        return []
+    target_terms = [value.lower() for value in _target_values(dynamic_config, sample_name) if len(value.strip()) >= 3]
+    targets = dynamic_config.get("validation_targets") if isinstance(dynamic_config, dict) else {}
+    watch_processes = set()
+    if isinstance(targets, dict):
+        for value in targets.get("watch_processes") or []:
+            watch_processes.add(str(value).strip().lower())
+    sample_key = sample_name.lower()
+    seed_processes = {sample_key}
+    high_signal_processes = {
+        sample_key,
+        "schtasks.exe",
+        "sc.exe",
+        "reg.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "rundll32.exe",
+        "regsvr32.exe",
+        "mshta.exe",
+        "certutil.exe",
+        "bitsadmin.exe",
+        *watch_processes,
+    }
+    file_write_ops = (
+        "writefile",
+        "setrenameinformationfile",
+        "setdispositioninformationfile",
+        "setendoffileinformationfile",
+    )
+    registry_write_ops = ("regsetvalue", "regcreatekey", "regdeletekey", "regdeletevalue")
+    process_ops = ("process create", "process start", "process exit")
+    persistence_keywords = (
+        "\\run",
+        "\\runonce",
+        "\\services",
+        "\\taskcache\\",
+        "\\tasks\\",
+        "startup",
+        "scheduled task",
+        "schtasks",
+        "winlogon",
+        "image file execution options",
+    )
+    suspicious_file_keywords = (
+        "\\startup\\",
+        "\\appdata\\roaming\\microsoft\\windows\\start menu\\programs\\startup",
+        "\\windows\\tasks\\",
+        "\\system32\\tasks\\",
+        "\\temp\\",
+        "\\appdata\\",
+        "\\programdata\\",
+    )
+    registry_noise_keywords = (
+        "\\muicache\\",
+        "\\userassist\\",
+        "\\shellbags\\",
+        "\\bagmru\\",
+        "\\recentdocs\\",
+        "\\typedpaths",
+    )
+    try:
+        max_lines = int(dynamic_config.get("max_procmon_lines_per_file", 200))
+    except Exception:
+        max_lines = 200
+    max_lines = max(25, min(max_lines, 1000))
+    rows: dict[str, list[str]] = {
+        "targeted_host_timeline.txt": [],
+        "targeted_file_activity.txt": [],
+        "targeted_registry_activity.txt": [],
+        "targeted_process_tree.txt": [],
+        "targeted_persistence.txt": [],
+    }
+    seen: dict[str, set[str]] = {name: set() for name in rows}
+    dropped: dict[str, int] = {name: 0 for name in rows}
+    relevant_pids: set[str] = set()
+    rows_scanned = 0
+
+    def clean_detail(detail: str) -> str:
+        # Procmon process-start rows can include the full environment, including
+        # remote-agent tokens. Keep command-line evidence but drop environment.
+        return detail.split("Environment:", 1)[0].strip()
+
+    def line_for(row: dict[str, str]) -> str:
+        detail = clean_detail(str(row.get("Detail", "") or ""))
+        values = [
+            str(row.get("Time of Day", "") or ""),
+            str(row.get("Process Name", "") or ""),
+            str(row.get("PID", "") or ""),
+            str(row.get("Operation", "") or ""),
+            str(row.get("Path", "") or ""),
+            str(row.get("Result", "") or ""),
+            detail,
+        ]
+        return "\t".join(values).strip()[:1200]
+
+    def add(name: str, line: str) -> None:
+        if not line or line in seen[name]:
+            return
+        seen[name].add(line)
+        if len(rows[name]) < max_lines:
+            rows[name].append(line)
+        else:
+            dropped[name] += 1
+
+    def term_match(text: str) -> bool:
+        return not target_terms or any(term in text for term in target_terms)
+
+    def process_match(process_name: str) -> bool:
+        return process_name in high_signal_processes or process_name == sample_key
+
+    def seed_process_match(process_name: str) -> bool:
+        return process_name in seed_processes
+
+    with csv_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            rows_scanned += 1
+            process_name = str(row.get("Process Name", "") or "").strip().lower()
+            pid = str(row.get("PID", "") or "").strip()
+            operation = str(row.get("Operation", "") or "").strip().lower()
+            path = str(row.get("Path", "") or "")
+            detail = clean_detail(str(row.get("Detail", "") or ""))
+            text = " ".join((process_name, operation, path, detail, str(row.get("Result", "") or "")))
+            low = text.lower()
+            if seed_process_match(process_name) and pid:
+                relevant_pids.add(pid)
+            matched = pid in relevant_pids or term_match(low) or process_match(process_name)
+            if not matched and not (operation == "process create" and any(name in low for name in high_signal_processes if name)):
+                continue
+
+            if operation == "process create":
+                child = re.search(r"\bPID:\s*(\d+)", detail)
+                if child and (pid in relevant_pids or sample_key in low or seed_process_match(process_name)):
+                    relevant_pids.add(child.group(1))
+
+            line = line_for(row)
+            relevant_actor = pid in relevant_pids or seed_process_match(process_name)
+            process_signal = operation in process_ops and (relevant_actor or sample_key in low)
+            is_registry_noise = any(key in low for key in registry_noise_keywords)
+            is_registry_write = relevant_actor and any(op in operation for op in registry_write_ops) and not is_registry_noise
+            is_file_write = relevant_actor and any(op in operation for op in file_write_ops)
+            is_createfile_signal = (
+                relevant_actor
+                and
+                operation == "createfile"
+                and any(key in low for key in suspicious_file_keywords)
+                and "name not found" not in low
+            )
+            is_persistence = (
+                relevant_actor
+                and
+                any(key in low for key in persistence_keywords)
+                and (process_signal or is_registry_write or is_file_write or is_createfile_signal)
+            )
+            high_signal = process_signal or is_registry_write or is_file_write or is_createfile_signal or is_persistence
+
+            if high_signal:
+                add("targeted_host_timeline.txt", line)
+            if is_file_write or is_createfile_signal:
+                add("targeted_file_activity.txt", line)
+            if is_registry_write:
+                add("targeted_registry_activity.txt", line)
+            if process_signal:
+                add("targeted_process_tree.txt", line)
+            if is_persistence:
+                add("targeted_persistence.txt", line)
+
+    written: list[Path] = []
+    for name, lines in rows.items():
+        output = dynamic_dir / name
+        if not lines:
+            output.write_text("No matching Procmon rows for configured validation targets.\n", encoding="utf-8")
+        else:
+            header = (
+                f"# Procmon targeted screening: {len(lines)} line(s)"
+                + (f", {dropped[name]} omitted by cap" if dropped[name] else "")
+                + "\n"
+            )
+            output.write_text(header + "\n".join(lines) + "\n", encoding="utf-8", errors="replace")
+        written.append(output)
+    summary = dynamic_dir / "targeted_procmon_summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "rows_scanned": rows_scanned,
+                "target_terms": target_terms,
+                "relevant_pids": sorted(relevant_pids),
+                "max_lines_per_file": max_lines,
+                "output_counts": {name: len(lines) for name, lines in rows.items()},
+                "omitted_by_cap": dropped,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    written.append(summary)
+    return written
 
 
 def _resolve_ida_command() -> str:
@@ -109,10 +787,9 @@ def _resolve_tool_paths() -> dict[str, str]:
         "wevtutil": "wevtutil",
         "dumpcap": "dumpcap",
         "tshark": "tshark",
-        "zeek": "zeek",
-        "suricata": "suricata",
-        "sysmon": r"C:\Sysmon\Sysmon64.exe",
+        "sysmon": r"C:\Program Files\reverseTools\Sysmon.exe",
         "procmon": r"C:\Tools\Procmon64.exe",
+        "x64dbg": r"C:\Program Files\reverseTools\x64dbg.exe",
         "diec": "diec",
         "yara": "yara",
         "exiftool": "exiftool",
@@ -166,6 +843,8 @@ def _tool_inventory() -> dict[str, dict[str, Any]]:
             kind = "headless_reverse"
         elif name in {"ghidra"}:
             kind = "headless_reverse"
+        elif name == "x64dbg":
+            kind = "debugger"
         elif name in {"diec", "yara", "exiftool", "upx"}:
             kind = "static_external"
         else:
@@ -258,6 +937,17 @@ def _write_job_file(case_id: str) -> dict[str, Any]:
     return job
 
 
+def _truncate_text(value: Any, limit: int) -> tuple[str, bool, int]:
+    text = "" if value is None else str(value)
+    if len(text) <= limit:
+        return text, False, len(text)
+    return (
+        text[:limit] + f"\n[TRUNCATED: output was {len(text)} chars, limit {limit}]",
+        True,
+        len(text),
+    )
+
+
 def _run_probe(command: str, timeout: int = 10) -> dict[str, Any]:
     started = time.time()
     try:
@@ -271,11 +961,17 @@ def _run_probe(command: str, timeout: int = 10) -> dict[str, Any]:
             timeout=max(1, min(timeout, 30)),
             cwd=str(BASE_DIR),
         )
+        stdout, stdout_truncated, stdout_chars = _truncate_text(proc.stdout, PROBE_STDOUT_LIMIT)
+        stderr, stderr_truncated, stderr_chars = _truncate_text(proc.stderr, PROBE_STDERR_LIMIT)
         return {
             "command": command,
             "exit_code": proc.returncode,
-            "stdout": (proc.stdout or "")[:12000],
-            "stderr": (proc.stderr or "")[:4000],
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "stdout_chars": stdout_chars,
+            "stderr_chars": stderr_chars,
             "elapsed_ms": int((time.time() - started) * 1000),
         }
     except subprocess.TimeoutExpired:
@@ -466,6 +1162,57 @@ def _recent_file_activity(case_id: str = "", limit: int = 30) -> list[dict[str, 
     return sorted(files, key=lambda item: item["mtime"], reverse=True)[:limit]
 
 
+def _process_metrics(process_probe: dict[str, Any] | None) -> dict[str, Any]:
+    probe = process_probe or {}
+    if not probe:
+        return {"status": "not_collected", "count": 0, "sample": []}
+    if probe.get("exit_code") != 0:
+        return {"status": "error", "count": 0, "sample": [], "error": (probe.get("stderr") or "")[:300]}
+
+    stdout = probe.get("stdout") or ""
+    sample: list[dict[str, Any]] = []
+    if os.name == "nt":
+        for row in csv.reader(io.StringIO(stdout)):
+            if len(row) < 5:
+                continue
+            name, pid, session_name, session_id, memory = row[:5]
+            try:
+                memory_kb = int("".join(ch for ch in memory if ch.isdigit()) or "0")
+            except ValueError:
+                memory_kb = 0
+            sample.append({
+                "name": name,
+                "pid": pid,
+                "session": session_name,
+                "session_id": session_id,
+                "memory_kb": memory_kb,
+            })
+    else:
+        for line in stdout.splitlines()[1:]:
+            parts = line.split(None, 10)
+            if len(parts) < 11:
+                continue
+            sample.append({
+                "user": parts[0],
+                "pid": parts[1],
+                "cpu_percent": parts[2],
+                "memory_percent": parts[3],
+                "command": parts[10],
+            })
+
+    top_memory = sorted(
+        [item for item in sample if isinstance(item.get("memory_kb"), int)],
+        key=lambda item: item.get("memory_kb", 0),
+        reverse=True,
+    )[:10]
+    return {
+        "status": "ok",
+        "count": len(sample),
+        "sample": sample[:25],
+        "top_memory": top_memory,
+    }
+
+
 def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[str, Any]:
     probes: dict[str, Any] = {}
     if include_probes:
@@ -488,6 +1235,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
     pcap_path = Path(dynamic_status.get("outputs", {}).get("network_pcap", "")) if dynamic_status else Path()
     pcap_bytes = pcap_path.stat().st_size if pcap_path.is_file() else 0
     file_activity = _recent_file_activity(case_id)
+    process_metrics = _process_metrics(probes.get("processes"))
 
     def probe_state(name: str) -> str:
         if name not in probes:
@@ -499,7 +1247,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
             "name": "process-observer",
             "role": "process_tree",
             "status": probe_state("processes"),
-            "summary": "Process snapshot collected; use raw probe output for PID/name review.",
+            "summary": f"Process snapshot collected; processes={process_metrics.get('count', 0)}.",
         },
         {
             "name": "network-observer",
@@ -538,6 +1286,7 @@ def _monitor_snapshot(case_id: str = "", include_probes: bool = True) -> dict[st
             "pcap_bytes": pcap_bytes,
             "active": dynamic_status.get("status") in {"collecting", "collected"},
         },
+        "process_metrics": process_metrics,
         "file_activity": file_activity,
         "observer_agents": observer_agents,
         "probes": probes,
@@ -666,11 +1415,22 @@ def _run_dynamic_placeholder(
     interface = str(cfg.get("network_interface") or cfg.get("interface") or "1")
     network_pcap = dynamic_dir / "network.pcapng"
     procmon_pml = dynamic_dir / "procmon.pml"
+    procmon_csv = dynamic_dir / "procmon.csv"
+    validation_targets = cfg.get("validation_targets")
+    if validation_targets:
+        targeting_payload = {
+            "validation_targets": validation_targets,
+            "static_hypotheses": cfg.get("static_hypotheses", []),
+        }
+        _write_json(dynamic_dir / "targeting_plan.json", targeting_payload)
+        _write_json(dynamic_dir / "dynamic_targeting_plan.json", targeting_payload)
     events: list[dict[str, Any]] = []
     availability = {
         "procmon": _tool_available(tools.get("procmon", "")),
         "dumpcap": _tool_available(tools.get("dumpcap", "")),
         "tshark": _tool_available(tools.get("tshark", "")),
+        "sysmon": _tool_available(tools.get("sysmon", "")),
+        "wevtutil": _tool_available(tools.get("wevtutil", "")),
     }
 
     def record(event: str, **kwargs: Any) -> None:
@@ -689,11 +1449,21 @@ def _run_dynamic_placeholder(
             "events": events,
             "outputs": {
                 "procmon_pml": str(procmon_pml),
+                "procmon_csv": str(procmon_csv),
                 "network_pcap": str(network_pcap),
                 "network_summary": str(dynamic_dir / "network_summary.txt"),
                 "dns": str(dynamic_dir / "dns.txt"),
                 "http": str(dynamic_dir / "http.txt"),
                 "conversations": str(dynamic_dir / "conversations.txt"),
+                "tls_sni": str(dynamic_dir / "tls_sni.txt"),
+                "tcp_syn": str(dynamic_dir / "tcp_syn.txt"),
+                "targeted_network_iocs": str(dynamic_dir / "targeted_network_iocs.txt"),
+                "sysmon_evtx": str(dynamic_dir / "sysmon.evtx"),
+                "sysmon_text": str(dynamic_dir / "sysmon.txt"),
+                "zeek_dir": str(dynamic_dir / "zeek"),
+                "suricata_dir": str(dynamic_dir / "suricata"),
+                "targeting_plan": str(dynamic_dir / "targeting_plan.json"),
+                "dynamic_targeting_plan": str(dynamic_dir / "dynamic_targeting_plan.json"),
             },
         }
         payload.update(kwargs)
@@ -702,15 +1472,26 @@ def _run_dynamic_placeholder(
     if mode == "dry_run":
         record("would_start_packet_capture", before_sample=True, tool=tools.get("dumpcap", ""), interface=interface)
         record("would_start_procmon", before_sample=True, tool=tools.get("procmon", ""))
+        if "sysmon" in collectors:
+            record("would_export_sysmon", after_sample=True, tool=tools.get("wevtutil", ""))
         record("would_execute_sample", sample=str(sample), timeout_seconds=timeout_seconds)
         record("would_stop_collectors", after_sample=True)
         record("would_parse_pcap", tool=tools.get("tshark", ""))
+        if "zeek" in collectors:
+            record("would_run_zeek", tool=tools.get("zeek", ""))
+        if "suricata" in collectors:
+            record("would_run_suricata", tool=tools.get("suricata", ""))
+        if "procmon" in collectors:
+            record("would_export_procmon_csv", tool=tools.get("procmon", ""), output=str(procmon_csv))
+        if validation_targets:
+            record("would_screen_dynamic_targets", target_count=len(_target_values(cfg, sample.name)))
         write_status("dry_run")
         return ["dynamic.collectors (dry_run)"]
 
     capture_enabled = "pcap" in collectors and availability["dumpcap"]
     procmon_enabled = "procmon" in collectors and availability["procmon"]
-    if not capture_enabled and not procmon_enabled:
+    sysmon_enabled = "sysmon" in collectors and availability["wevtutil"]
+    if not capture_enabled and not procmon_enabled and not sysmon_enabled:
         note = "Dynamic analysis skipped: no configured collector is available."
         (dynamic_dir / "_SKIPPED").write_text(note, encoding="utf-8")
         record("skipped_no_collectors", reason=note)
@@ -718,6 +1499,7 @@ def _run_dynamic_placeholder(
         return ["dynamic.skipped"]
 
     dumpcap_proc: subprocess.Popen | None = None
+    procmon_proc: subprocess.Popen | None = None
     try:
         if capture_enabled:
             cmd = [tools["dumpcap"], "-i", interface, "-w", str(network_pcap)]
@@ -728,8 +1510,20 @@ def _run_dynamic_placeholder(
 
         if procmon_enabled:
             cmd = [tools["procmon"], "/AcceptEula", "/Quiet", "/Minimized", "/BackingFile", str(procmon_pml)]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-            record("procmon_started", before_sample=True, command=cmd, exit_code=proc.returncode, stderr=(proc.stderr or "")[:1000])
+            procmon_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            time.sleep(2.0)
+            record(
+                "procmon_started",
+                before_sample=True,
+                command=cmd,
+                pid=procmon_proc.pid,
+                still_running=procmon_proc.poll() is None,
+            )
             write_status("collecting")
             time.sleep(1.0)
 
@@ -766,19 +1560,93 @@ def _run_dynamic_placeholder(
         write_status("collecting")
 
     if "tshark" in collectors and availability["tshark"] and network_pcap.exists():
-        for output_name, cmd in [
+        tshark_jobs = [
             ("network_summary.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,ip"]),
             ("dns.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "dns"]),
             ("http.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "http"]),
             ("conversations.txt", [tools["tshark"], "-r", str(network_pcap), "-q", "-z", "conv,tcp"]),
-        ]:
+            ("tls_sni.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "tls.handshake.extensions_server_name", "-T", "fields", "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst", "-e", "tls.handshake.extensions_server_name"]),
+            ("tcp_syn.txt", [tools["tshark"], "-r", str(network_pcap), "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0", "-T", "fields", "-e", "frame.time", "-e", "ip.src", "-e", "ip.dst", "-e", "tcp.dstport"]),
+        ]
+        target_filter = _tshark_target_filter(cfg)
+        if target_filter:
+            tshark_jobs.append((
+                "targeted_network_iocs.txt",
+                [
+                    tools["tshark"],
+                    "-r",
+                    str(network_pcap),
+                    "-Y",
+                    target_filter,
+                    "-T",
+                    "fields",
+                    "-e",
+                    "frame.time",
+                    "-e",
+                    "ip.src",
+                    "-e",
+                    "ip.dst",
+                    "-e",
+                    "dns.qry.name",
+                    "-e",
+                    "http.host",
+                    "-e",
+                    "http.request.uri",
+                    "-e",
+                    "tls.handshake.extensions_server_name",
+                ],
+            ))
+        for output_name, cmd in tshark_jobs:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            (dynamic_dir / output_name).write_text(
-                (proc.stdout or "") + (("\n[stderr]\n" + proc.stderr) if proc.stderr else ""),
-                encoding="utf-8",
-                errors="replace",
-            )
+            _write_command_output(dynamic_dir / output_name, proc)
             record("pcap_parsed", command=cmd, output=str(dynamic_dir / output_name), exit_code=proc.returncode)
+
+    if procmon_enabled and procmon_pml.exists():
+        cmd = [tools["procmon"], "/AcceptEula", "/OpenLog", str(procmon_pml), "/SaveAs", str(procmon_csv)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            record("procmon_exported", command=cmd, output=str(procmon_csv), exit_code=proc.returncode, stderr=(proc.stderr or "")[:1000])
+            screen_procmon = _shared_screen_procmon_csv or _screen_procmon_csv
+            for output in screen_procmon(procmon_csv, dynamic_dir, cfg, sample.name):
+                record("procmon_screened", output=str(output))
+        except Exception as exc:
+            record("procmon_export_failed", command=cmd, error=f"{type(exc).__name__}: {exc}")
+
+    if sysmon_enabled:
+        evtx_path = dynamic_dir / "sysmon.evtx"
+        text_path = dynamic_dir / "sysmon.txt"
+        export_cmd = [tools["wevtutil"], "epl", "Microsoft-Windows-Sysmon/Operational", str(evtx_path), "/ow:true"]
+        text_cmd = [tools["wevtutil"], "qe", "Microsoft-Windows-Sysmon/Operational", "/f:text", "/c:2000", "/rd:true"]
+        for output_path, cmd in ((evtx_path, export_cmd), (text_path, text_cmd)):
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if output_path == text_path:
+                    _write_command_output(output_path, proc)
+                record("sysmon_exported", command=cmd, output=str(output_path), exit_code=proc.returncode, stderr=(proc.stderr or "")[:1000])
+            except Exception as exc:
+                record("sysmon_export_failed", command=cmd, output=str(output_path), error=f"{type(exc).__name__}: {exc}")
+
+    if "zeek" in collectors and availability["zeek"] and network_pcap.exists():
+        zeek_dir = dynamic_dir / "zeek"
+        zeek_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [tools["zeek"], "-r", str(network_pcap)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=str(zeek_dir))
+            _write_command_output(zeek_dir / "_zeek_run.txt", proc)
+            record("zeek_parsed", command=cmd, output=str(zeek_dir), exit_code=proc.returncode)
+        except Exception as exc:
+            record("zeek_failed", command=cmd, output=str(zeek_dir), error=f"{type(exc).__name__}: {exc}")
+
+    if "suricata" in collectors and availability["suricata"] and network_pcap.exists():
+        suricata_dir = dynamic_dir / "suricata"
+        suricata_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [tools["suricata"], "-r", str(network_pcap), "-l", str(suricata_dir), "-k", "none"]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            _write_command_output(suricata_dir / "_suricata_run.txt", proc)
+            record("suricata_parsed", command=cmd, output=str(suricata_dir), exit_code=proc.returncode)
+        except Exception as exc:
+            record("suricata_failed", command=cmd, output=str(suricata_dir), error=f"{type(exc).__name__}: {exc}")
 
     write_status("collected")
     return ["dynamic.collectors"]
@@ -1035,6 +1903,16 @@ def _run_job(case_id: str, mode: str) -> dict[str, Any]:
         done, failed = _run_static(case_id, outbox, sample, mode)
         steps_done.extend(done)
         steps_failed.extend(failed)
+        if plan.get("dynamic", False):
+            derive_targets = _shared_derive_static_behavior_targets or _derive_static_behavior_targets
+            merge_config = _shared_merge_dynamic_config or _merge_dynamic_config
+            derived = derive_targets(outbox, sample.name)
+            job["dynamic_config"] = merge_config(
+                job.get("dynamic_config", {}),
+                derived.get("dynamic_config", {}),
+            )
+            if derived.get("static_hypotheses"):
+                job["dynamic_config"]["static_hypotheses"] = derived["static_hypotheses"]
     if plan.get("ida", False) or plan.get("reverse", False):
         done, failed = _run_ida_headless(outbox, sample, mode)
         steps_done.extend(done)
@@ -1048,10 +1926,10 @@ def _run_job(case_id: str, mode: str) -> dict[str, Any]:
     if plan.get("network", False):
         (outbox / "dynamic").mkdir(parents=True, exist_ok=True)
         (outbox / "dynamic" / "_NETWORK_NOTE").write_text(
-            "Network capture will be produced by the dynamic collector when implemented.",
+            "Network capture is produced by the dynamic collector when pcap/dumpcap is enabled.",
             encoding="utf-8",
         )
-        steps_done.append("network.placeholder")
+        steps_done.append("network.dynamic_collector")
     if plan.get("verify", False):
         steps_done.extend(_run_verify(outbox, case_id, sample, sample_sha256, mode))
 
@@ -1074,6 +1952,28 @@ def _run_job(case_id: str, mode: str) -> dict[str, Any]:
         "steps_completed": steps_done,
         "steps_failed": steps_failed,
     }
+
+
+def _run_case_job(case_id: str, mode: str) -> dict[str, Any]:
+    try:
+        result = _run_job(case_id, mode=mode)
+        _write_state(case_id, {
+            "status": result["status"],
+            "completed_at": time.time(),
+            "steps_completed": result["steps_completed"],
+            "steps_failed": result["steps_failed"],
+        })
+        return result
+    except Exception as exc:
+        outbox = OUTBOX_DIR / case_id
+        outbox.mkdir(parents=True, exist_ok=True)
+        (outbox / "_FAILED").write_text(str(exc), encoding="utf-8")
+        _write_state(case_id, {"status": "failed", "error": str(exc)})
+        return {"case_id": case_id, "status": "failed", "error": str(exc)}
+
+
+def _run_case_job_background(case_id: str, mode: str) -> None:
+    _run_case_job(case_id, mode=mode)
 
 
 @app.get("/api/v1/health")
@@ -1200,21 +2100,15 @@ async def run_case(case_id: str, body: dict[str, Any] | None = None, authorizati
 
     mode = str(body.get("mode", "real") or "real")
     _write_state(case_id, {"status": "running", "started_at": time.time()})
-    try:
-        result = _run_job(case_id, mode=mode)
-        _write_state(case_id, {
-            "status": result["status"],
-            "completed_at": time.time(),
-            "steps_completed": result["steps_completed"],
-            "steps_failed": result["steps_failed"],
-        })
-        return result
-    except Exception as exc:
-        outbox = OUTBOX_DIR / case_id
-        outbox.mkdir(parents=True, exist_ok=True)
-        (outbox / "_FAILED").write_text(str(exc), encoding="utf-8")
-        _write_state(case_id, {"status": "failed", "error": str(exc)})
-        return {"case_id": case_id, "status": "failed", "error": str(exc)}
+    if bool(body.get("background", False)):
+        thread = threading.Thread(
+            target=_run_case_job_background,
+            args=(case_id, mode),
+            daemon=True,
+        )
+        thread.start()
+        return {"case_id": case_id, "status": "running", "background": True}
+    return _run_case_job(case_id, mode=mode)
 
 
 @app.get("/api/v1/cases/{case_id}/status")
@@ -1271,20 +2165,6 @@ async def list_cases(authorization: str | None = Header(None)):
                     "created_at": state.get("created_at", 0),
                 })
     return {"cases": cases, "total": len(cases)}
-
-
-@app.on_event("startup")
-async def _startup():
-    CASES_DIR.mkdir(parents=True, exist_ok=True)
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-    tools = _resolve_tool_paths()
-    inventory = _tool_inventory()
-    available = sum(1 for info in inventory.values() if info.get("available"))
-    print("chatcli standalone Guest Agent")
-    print(f"  Base:  {BASE_DIR}")
-    print(f"  Cases: {CASES_DIR}")
-    print(f"  Tools: {available}/{len(inventory)} available")
-    print(f"  Auth:  {'configured' if AGENT_TOKEN else 'MISSING'}")
 
 
 def main() -> None:

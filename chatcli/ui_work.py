@@ -32,6 +32,70 @@ PLAN_READY_MARKER = "PLAN READY"
 TASK_COMPLETE_MARKER = "TASK COMPLETE"
 PHASE_COMPLETE_MARKER = "PHASE COMPLETE"
 
+HTML_OUTPUT_HINT_RE = re.compile(
+    r"(?:输出|保存|写入|写到|导出|生成|放到|存到|output|save|write|export|render)"
+    r".{0,40}$",
+    re.IGNORECASE,
+)
+QUOTED_HTML_PATH_RE = re.compile(
+    r"[\"'“”‘’`]([^\"'“”‘’`]*?\.html?)[\"'“”‘’`]",
+    re.IGNORECASE,
+)
+UNQUOTED_HTML_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/][^\s,，;；。]+|\.{1,2}[\\/][^\s,，;；。]+|"
+    r"[\\/][^\s,，;；。]+|[^\s,，;；。]+\.html?)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_html_output_path(value: str, workspace: str) -> str:
+    cleaned = (value or "").strip().strip("\"'“”‘’`()[]<>")
+    cleaned = cleaned.rstrip(".,，。;；:")
+    if not cleaned or "://" in cleaned:
+        return ""
+    path = Path(cleaned)
+    if path.suffix.lower() not in (".html", ".htm"):
+        return ""
+    if not path.is_absolute():
+        path = Path(workspace) / path
+    return str(path)
+
+
+def extract_requested_html_output_path(task_text: str, workspace: str) -> str:
+    """Extract an explicitly requested HTML report path from user task text."""
+    text = task_text or ""
+    lower = text.lower()
+    prefix = "malware triage:"
+    if prefix in lower:
+        text = text[lower.index(prefix) + len(prefix):].strip()
+
+    candidates: list[tuple[int, str]] = []
+    for match in QUOTED_HTML_PATH_RE.finditer(text):
+        candidates.append((match.start(1), match.group(1)))
+    for match in UNQUOTED_HTML_PATH_RE.finditer(text):
+        candidates.append((match.start(0), match.group(0)))
+
+    normalized: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for start, raw in candidates:
+        path = _normalize_html_output_path(raw, workspace)
+        if path and path not in seen:
+            normalized.append((start, path))
+            seen.add(path)
+    if not normalized:
+        return ""
+
+    hinted = []
+    for start, path in normalized:
+        before = text[max(0, start - 60):start]
+        if HTML_OUTPUT_HINT_RE.search(before):
+            hinted.append(path)
+    if hinted:
+        return hinted[-1]
+    if len(normalized) == 1:
+        return normalized[0][1]
+    return ""
+
 
 ACTION_PATTERNS = [
     r"\bfix\b", r"\bimplement\b", r"\badd\b", r"\bcreate\b",
@@ -101,6 +165,9 @@ class WorkCommandMixin:
             self._run_work_loop(prompt)
             return
         if self._has_active_work() and self._looks_like_work_followup(ui):
+            if self._is_malware_task():
+                self._run_work_loop(MALWARE_CONTINUE_PROMPT, allow_pauses=False)
+                return
             prompt = (
                 "[User follow-up for the active task]\n"
                 f"{ui}\n\n"
@@ -110,6 +177,9 @@ class WorkCommandMixin:
             return
         if self._should_start_security_audit(ui):
             self._start_security_audit(ui)
+            return
+        if self._should_start_remote_batch_analysis(ui):
+            self._start_remote_batch_analysis(ui)
             return
         if self._should_start_malware_triage(ui):
             self._start_malware_triage(ui)
@@ -139,10 +209,66 @@ class WorkCommandMixin:
         lowered = ui.strip().lower()
         if not lowered:
             return False
+        if self._looks_like_plain_question(ui):
+            return False
         if re.search(r"\b(skill|skills|prompt|route|routing)\b|能力|功能|触发|路由", lowered, re.IGNORECASE):
             if any(re.search(p, lowered, re.IGNORECASE) for p in ACTION_PATTERNS):
                 return False
         return any(re.search(p, lowered, re.IGNORECASE) for p in MALWARE_TRIAGE_PATTERNS)
+    def _should_start_remote_batch_analysis(self, ui: str) -> bool:
+        lowered = ui.strip().lower()
+        if not lowered:
+            return False
+        if re.search(r"\b(skill|skills|prompt|route|routing)\b|能力|功能|触发|路由|参数|命令", lowered, re.IGNORECASE):
+            return False
+        remote = bool(re.search(r"腾讯云|远端|远程|服务器|guest agent|remote|tencent", lowered, re.IGNORECASE))
+        sample = bool(re.search(r"恶意样本|样本|恶意文件|木马|病毒|malware|sample", lowered, re.IGNORECASE))
+        sequential = bool(re.search(r"依次|逐个|一个个|顺序|批量|目录|文件夹|轮流|排队|workflow|工作流|batch", lowered, re.IGNORECASE))
+        analysis = bool(re.search(r"分析|triage|analysis|analy[sz]e|检测|跑|处理", lowered, re.IGNORECASE))
+        return remote and sample and sequential and analysis
+    def _start_remote_batch_analysis(self, ui: str):
+        if not self.agent.tools.get("remote_batch_analyze"):
+            self.console.print(
+                "[yellow]remote_batch_analyze is not registered. Configure remote.enabled "
+                "with CHATCLI_REMOTE_URL/CHATCLI_GUEST_AGENT_TOKEN or config.yaml first.[/]"
+            )
+            return
+        task_id = start_task(self.config.workspace, f"Remote batch malware analysis: {ui}")
+        self._set_agent_task_scope(task_id)
+        self._malware_review_done = False
+        self.console.print(Panel(
+            "[bold magenta]REMOTE BATCH ANALYSIS[/]\n"
+            f"[dim]Scope: {ui}[/]\n"
+            "[dim]Natural-language request routed to remote_batch_analyze; normal polling is unchanged.[/]",
+            border_style="magenta", padding=(0,1)
+        ))
+        prompt = (
+            "[Natural-language Tencent Cloud sequential malware-analysis request]\n"
+            f"User request: {ui}\n\n"
+            "Interpret the user's text and use the existing `remote_batch_analyze` tool when enough "
+            "information is present. Do not ask the user to rewrite the request as CLI flags or JSON.\n\n"
+            "Routing rules:\n"
+            "- If the user gave a remote directory, call `remote_batch_analyze` with `sample_dir` and a sensible "
+            "pattern such as `*.exe` unless the user specified another pattern.\n"
+            "- If the user gave one or more remote sample paths, call it with `sample_paths`.\n"
+            "- If the remote directory/sample path is missing, ask one concise question for that path.\n"
+            "- Default to static + IDA + verify. Enable dynamic/network only when the user explicitly asks for "
+            "dynamic, sandbox, behavior/runtime analysis, or says static and dynamic analysis.\n"
+            "- Keep dynamic execution inside the isolated Tencent Cloud analysis server.\n"
+            "- If dynamic analysis is requested for multiple samples, explain that `remote_batch_analyze` "
+            "does not restore a VM snapshot between samples. For strong isolation, ask for confirmation "
+            "to process one sample at a time with download + rollback between cases.\n"
+            "- Run samples sequentially through `remote_batch_analyze`; do not implement a custom polling loop "
+            "and do not change chatcli's normal agent polling behavior.\n"
+            "- After the tool finishes, read the downloaded local result directories for every completed case. "
+            "Analyze the static outputs, extract identity/IOCs/capabilities/evidence gaps, and synthesize a "
+            "Chinese malware triage report. The batch tool output alone is not the analysis report.\n"
+            "- Generate the final HTML report before saying TASK COMPLETE. If there are multiple samples, produce "
+            "one batch HTML report that contains a per-sample section and a cross-sample IOC/capability summary "
+            "unless the user explicitly asked for separate files.\n"
+            "- Say TASK COMPLETE only after the HTML exists or a concrete renderer/write failure is reported."
+        )
+        self._run_work_loop(prompt, allow_pauses=False, max_cycles=self._max_work_cycles())
     def _start_malware_triage(self, ui: str):
         task_id = start_task(self.config.workspace, f"Malware triage: {ui}")
         self._set_agent_task_scope(task_id)
@@ -198,13 +324,24 @@ class WorkCommandMixin:
         return str(status.get("status", "")).strip().lower() == "in_progress"
     def _looks_like_work_followup(self, ui: str) -> bool:
         lowered = ui.strip().lower()
-        if lowered in ("continue", "go on", "keep going", "resume", "继续", "接着", "接着做"):
-            return True
-        prefixes = (
-            "choose ", "use ", "option ", "方案", "选择", "选", "用",
-            "按", "采用", "继续", "接着",
+        return lowered in (
+            "continue", "go on", "keep going", "resume",
+            "继续", "接着", "接着做", "继续做",
         )
-        return lowered.startswith(prefixes)
+    def _looks_like_plain_question(self, ui: str) -> bool:
+        text = ui.strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        if lowered.startswith(QUESTION_PREFIXES) or lowered.endswith(("?", "？")):
+            return True
+        return bool(re.search(
+            r"有(?:一个|个)?问题|问一下|请问|怎么|如何|为什么|是什么|是否|是不是|能不能|可以吗|"
+            r"可不可以|需不需要|要不要|区别|原理|用法|参数|命令|解释|说明|"
+            r"\b(?:how|why|what|can i|could i|should i|question|explain|difference|usage)\b",
+            lowered,
+            re.IGNORECASE,
+        ))
     def _should_start_smart_work(self, ui: str) -> bool:
         if not getattr(self.config, "smart_work", True):
             return False
@@ -212,6 +349,8 @@ class WorkCommandMixin:
         if not text:
             return False
         lowered = text.lower()
+        if self._looks_like_plain_question(text):
+            return False
         has_action = any(re.search(p, lowered, re.IGNORECASE) for p in ACTION_PATTERNS)
         if not has_action:
             return False
@@ -316,7 +455,13 @@ class WorkCommandMixin:
         if not status:
             return False
         first_line = (status.get("content") or "").splitlines()[0:1]
-        return bool(first_line and first_line[0].lower().startswith("# task: malware triage:"))
+        if not first_line:
+            return False
+        lowered = first_line[0].lower()
+        return (
+            lowered.startswith("# task: malware triage:")
+            or lowered.startswith("# task: remote batch malware analysis:")
+        )
 
     def _completion_report_text(self, result: str, history_start: int | None) -> str:
         if result and self._has_completion_signal(result):
@@ -443,6 +588,10 @@ class WorkCommandMixin:
         task_id = str(status.get("task_id") or "").strip()
         sample_name = self._extract_sample_name()
         sample_dir = self._extract_sample_dir()
+        requested_output = extract_requested_html_output_path(
+            status.get("content", ""),
+            self.config.workspace,
+        )
         try:
             path = export_html_report(
                 self.config.workspace,
@@ -451,6 +600,7 @@ class WorkCommandMixin:
                 report,
                 sample_name=sample_name,
                 sample_dir=sample_dir,
+                output_path=requested_output,
             )
             log_milestone(self.config.workspace, f"HTML report exported: {path}")
             self.console.print(f"[green]report[/] [dim]{path}[/]")
@@ -540,6 +690,11 @@ class WorkCommandMixin:
         state = str(status.get("status", "")).strip().lower()
         if state in ("done", "complete", "completed"):
             return True
+        if self._is_malware_task():
+            # Malware and remote-batch malware work must end with an actual
+            # report/completion signal. A model-created checklist can describe
+            # progress, but it is not enough to prove analysis and HTML export.
+            return False
         total = int(status.get("total", 0) or 0)
         done = int(status.get("done", 0) or 0)
         if total > 0 and done >= total:

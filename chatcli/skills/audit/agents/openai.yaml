@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Audit"
+  short_description: "Review changes, risks, regressions, and tests"
+  default_prompt: "Use $audit to review the current changes for bugs, regressions, risk, and missing tests."

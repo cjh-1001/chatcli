@@ -25,6 +25,26 @@ Downloaded results are stored under:
 .chatcli/remote_results/<case-id>/
 ```
 
+## Batch Results
+
+For `remote_batch_analyze`, inspect every completed item in the tool metadata:
+
+```text
+results[].case_id
+results[].sample_path
+results[].status
+results[].local_dir
+results[].download_error
+```
+
+Report a per-sample status table before writing conclusions. For failed or
+missing samples, include the case ID, remote sample path, error, and whether the
+batch stopped because `stop_on_failure=true`.
+
+When multiple local result directories exist, do not merge evidence blindly.
+Keep per-sample evidence separate, then add a cross-sample comparison only after
+the individual findings are clear.
+
 ## Output Checklist
 
 Static:
@@ -52,7 +72,7 @@ Dynamic:
 ```text
 dynamic/dynamic_status.json
 dynamic/network.pcapng
-dynamic/network_summary.json
+dynamic/network_summary.txt
 dynamic/dns.txt
 dynamic/http.txt
 dynamic/conversations.txt

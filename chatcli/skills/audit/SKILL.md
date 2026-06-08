@@ -1,19 +1,6 @@
 ---
 name: audit
-description: Code and implementation audit workflow for reviewing changes, plans, risks, regressions, security issues, missing tests, and whether a task should be split before coding. Use when the user asks for review/audit/检查/审计, before large or risky implementation work, after code changes, or when deciding if the current task is complete.
-aliases:
-  - review
-triggers:
-  - review
-  - audit
-  - risk
-  - regression
-  - missing tests
-  - code review
-  - 检查
-  - 审计
-  - 评审
-  - 风险
+description: Code and implementation audit workflow for reviewing changes, plans, risks, regressions, security issues, missing tests, and whether a task should be split before coding. Use when the user asks for review, audit, risk assessment, regression review, missing-test review, code review, 检查, 审计, 评审, or 风险判断; before large or risky implementation work; after code changes; or when deciding if the current task is complete.
 ---
 
 # Audit Skill

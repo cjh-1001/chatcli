@@ -451,11 +451,13 @@ def export_html_report(
     content: str,
     sample_name: str = "",
     sample_dir: str = "",
+    output_path: str = "",
 ) -> Path:
     """Persist a completed analysis report as a self-contained HTML file.
 
-    Saves alongside the sample when sample_dir is provided and exists,
-    otherwise falls back to .chatcli/reports/.
+    Saves to output_path when explicitly provided. Otherwise saves alongside
+    the sample when sample_dir is provided and exists, falling back to
+    .chatcli/reports/.
 
     Naming: {sample_stem}_triage_report.html
     Fallback: malware-triage-{task_id}.html
@@ -466,38 +468,47 @@ def export_html_report(
     if not safe_task:
         safe_task = stamp
 
-    # Determine output directory: prefer sample's directory
-    if sample_dir and Path(sample_dir).exists():
-        report_dir = Path(sample_dir)
+    explicit_output = str(output_path or "").strip()
+    if explicit_output:
+        path = Path(explicit_output)
+        if not path.is_absolute():
+            path = Path(workspace) / path
+        if path.suffix.lower() not in (".html", ".htm"):
+            path = path.with_suffix(".html")
+        path.parent.mkdir(parents=True, exist_ok=True)
     else:
-        report_dir = Path(workspace) / ".chatcli" / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
+        # Determine output directory: prefer sample's directory
+        if sample_dir and Path(sample_dir).exists():
+            report_dir = Path(sample_dir)
+        else:
+            report_dir = Path(workspace) / ".chatcli" / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check if a report for this task was already generated recently (by the AI's
-    # template pipeline). Skip auto-export to avoid overwriting a better report.
-    recent_cutoff = datetime.now().timestamp() - 120  # 2 minutes
-    for existing in report_dir.iterdir():
-        if not existing.is_file() or existing.suffix != ".html":
-            continue
-        if safe_task and safe_task in existing.name:
-            if existing.stat().st_mtime > recent_cutoff:
-                return existing  # Already exported; skip duplicate
-        # Also check for the new naming pattern
-        if stem and stem in existing.name and "_triage_report" in existing.name:
-            if existing.stat().st_mtime > recent_cutoff:
-                return existing
+        # Check if a report for this task was already generated recently (by the AI's
+        # template pipeline). Skip auto-export to avoid overwriting a better report.
+        recent_cutoff = datetime.now().timestamp() - 120  # 2 minutes
+        for existing in report_dir.iterdir():
+            if not existing.is_file() or existing.suffix != ".html":
+                continue
+            if safe_task and safe_task in existing.name:
+                if existing.stat().st_mtime > recent_cutoff:
+                    return existing  # Already exported; skip duplicate
+            # Also check for the new naming pattern
+            if stem and stem in existing.name and "_triage_report" in existing.name:
+                if existing.stat().st_mtime > recent_cutoff:
+                    return existing
 
-    # Build filename: {sample_stem}_triage_report.html
-    if stem:
-        path = report_dir / f"{stem}_triage_report.html"
-    else:
-        path = report_dir / f"malware-triage-{safe_task}.html"
-    if path.exists():
-        for idx in range(1, 100):
-            candidate = path.with_name(f"{path.stem}-{idx}{path.suffix}")
-            if not candidate.exists():
-                path = candidate
-                break
+        # Build filename: {sample_stem}_triage_report.html
+        if stem:
+            path = report_dir / f"{stem}_triage_report.html"
+        else:
+            path = report_dir / f"malware-triage-{safe_task}.html"
+        if path.exists():
+            for idx in range(1, 100):
+                candidate = path.with_name(f"{path.stem}-{idx}{path.suffix}")
+                if not candidate.exists():
+                    path = candidate
+                    break
     # Strip completion markers and trailing noise from the report content
     clean = (content or "").strip()
     clean = re.sub(r"\n?\s*TASK\s*COMPLETE\s*$", "", clean, flags=re.IGNORECASE).strip()
@@ -656,5 +667,4 @@ def log_milestone(workspace: str, text: str) -> None:
     with open(lf, "a", encoding="utf-8") as f:
         f.write(entry)
     touch_task(workspace)
-
 

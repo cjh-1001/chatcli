@@ -1,15 +1,18 @@
 from pathlib import Path
+import _thread
 import os
 import platform
 import shutil
 import shlex
 import sys
+import time
 import threading
 from rich.console import Console
 from rich.panel import Panel
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.filters import has_completions
 from prompt_toolkit.shortcuts import radiolist_dialog
 from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
@@ -29,7 +32,9 @@ from .ui_work import WorkCommandMixin
 WELCOME_INFO = """[bold cyan]chatcli[/] - CLI superpowers
 Provider: {provider} | Model: {model}
 Workspace: {workspace}
-Type /help for commands, /exit to quit."""
+Type /help for commands, /exit to quit.
+Paste multi-line text directly; Enter submits, Ctrl+J inserts a newline.
+Esc clears the current input; during a running response, Esc interrupts it."""
 
 class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
     def __init__(self, config):
@@ -48,6 +53,13 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         kb = KeyBindings()
         @kb.add("c-d")
         def _(event): event.app.exit()
+        @kb.add("enter", filter=~has_completions)
+        def _(event): event.app.current_buffer.validate_and_handle()
+        @kb.add("c-j")
+        def _(event): event.app.current_buffer.insert_text("\n")
+        @kb.add("escape")
+        def _(event):
+            event.app.current_buffer.reset()
         style = Style.from_dict({
             "prompt": "bold cyan",
             "completion-menu.completion": "bg:#202020 #d0d0d0",
@@ -63,7 +75,49 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
                 complete_while_typing=True,
                 complete_style=CompleteStyle.MULTI_COLUMN,
                 reserve_space_for_menu=8,
-                multiline=False)
+                mouse_support=False,
+                multiline=True,
+                prompt_continuation="    ")
+    def _escape_interrupt_watcher(self, stop_event: threading.Event) -> None:
+        """Translate Esc into KeyboardInterrupt while the agent is running.
+
+        PromptSession owns key handling only while the prompt is active. During
+        model/tool execution the main thread is busy, so on Windows we poll the
+        console input briefly and interrupt the main thread when Esc is pressed.
+        """
+        if platform.system().lower() != "windows" or not self._interactive:
+            return
+        try:
+            import msvcrt
+        except Exception:
+            return
+        while not stop_event.is_set():
+            try:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch == "\x1b":
+                        _thread.interrupt_main()
+                        return
+                time.sleep(0.05)
+            except Exception:
+                return
+
+    def _run_with_escape_interrupt(self, func):
+        stop_event = threading.Event()
+        watcher = None
+        if self._interactive and platform.system().lower() == "windows":
+            watcher = threading.Thread(
+                target=self._escape_interrupt_watcher,
+                args=(stop_event,),
+                daemon=True,
+            )
+            watcher.start()
+        try:
+            return func()
+        finally:
+            stop_event.set()
+            if watcher:
+                watcher.join(timeout=0.2)
     def print_welcome(self):
         info = get_workspace_info(self.config.workspace)
         body = WELCOME_INFO.format(provider=self.config.provider.provider, model=self.config.provider.model, workspace=info or str(self.config.workspace))
@@ -99,11 +153,24 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
                 try: ui = self.session.prompt([("class:prompt", "  > ")]).strip()
                 except (EOFError, KeyboardInterrupt): self.console.print("\n[dim]Goodbye![/]"); break
                 if not ui: continue
-                r = self._handle_command(ui)
+                try:
+                    r = self._run_with_escape_interrupt(
+                        lambda: self._handle_command(ui)
+                    )
+                except KeyboardInterrupt:
+                    self.console.print("\n[yellow]Interrupted. Current command stopped.[/]")
+                    self.agent.save_session()
+                    continue
                 if r == "EXIT": break
                 if r is not None: continue
                 try:
-                    self._handle_smart_input(ui)
+                    self._run_with_escape_interrupt(
+                        lambda: self._handle_smart_input(ui)
+                    )
+                except KeyboardInterrupt:
+                    self.console.print("\n[yellow]Interrupted. Current response stopped.[/]")
+                    self.agent.save_session()
+                    continue
                 except Exception as e:
                     self.console.print(
                         f"[red]Error: {type(e).__name__}: {e}[/]"
@@ -134,7 +201,7 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         if c=="/tools": return self._handle_tools(a)
         if c=="/child": return self._handle_child(a)
         if c=="/observe": return self._handle_observe(a)
-        if c=="/dashboard": return self._handle_dashboard()
+        if c=="/dashboard": return self._handle_dashboard(a)
         if c in ("/auto-requests", "/autorequests"): return self._handle_auto_requests(a)
         if c=="/plan":
             self.agent.plan(a or "Help me plan a task")
@@ -147,6 +214,7 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         if c=="/work": return self._handle_work(a)
         if c=="/audit": return self._handle_audit(a)
         if c=="/malware": return self._handle_malware(a)
+        if c=="/remote-batch": return self._handle_remote_batch(a)
         if c=="/malware-share": return self._handle_malware_share(a)
         if c=="/reverse": return self._handle_reverse(a)
         if c=="/evolve": return self._handle_evolve(a)
@@ -313,6 +381,143 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
             self.console.print(result.content)
             return True
         self.console.print("[yellow]Usage: /tools list | /tools check [tool...] [--versions][/]")
+        return True
+    def _handle_remote_batch(self, a):
+        if not self.agent.tools.get("remote_batch_analyze"):
+            self.console.print(
+                "[yellow]remote_batch_analyze is not registered. Configure remote.enabled "
+                "with CHATCLI_REMOTE_URL/CHATCLI_GUEST_AGENT_TOKEN or config.yaml first.[/]"
+            )
+            return True
+        try:
+            parts = shlex.split(a) if a else []
+        except ValueError as e:
+            self.console.print(f"[yellow]Invalid arguments:[/] {e}")
+            return True
+
+        params = {
+            "pattern": "*.exe",
+            "recursive": False,
+            "mode": "real",
+            "download": True,
+            "wait": True,
+            "stop_on_failure": True,
+            "timeout_seconds": 3600,
+            "poll_interval_seconds": 15,
+            "run_request_timeout_seconds": 60,
+        }
+        samples = []
+        positionals = []
+        dynamic = False
+        static_only = False
+
+        i = 0
+        while i < len(parts):
+            token = parts[i]
+            if token in ("--sample", "-s"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch --sample <remote_path>[/]")
+                    return True
+                samples.append(parts[i + 1])
+                i += 1
+            elif token in ("--pattern", "-p"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --pattern <glob>[/]")
+                    return True
+                params["pattern"] = parts[i + 1]
+                i += 1
+            elif token in ("--output-dir", "-o"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --output-dir <dir>[/]")
+                    return True
+                params["output_dir"] = parts[i + 1]
+                i += 1
+            elif token == "--case-prefix":
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --case-prefix <prefix>[/]")
+                    return True
+                params["case_prefix"] = parts[i + 1]
+                i += 1
+            elif token in ("--timeout", "--timeout-seconds"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --timeout <seconds>[/]")
+                    return True
+                params["timeout_seconds"] = parts[i + 1]
+                i += 1
+            elif token in ("--poll", "--poll-interval"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --poll <seconds>[/]")
+                    return True
+                params["poll_interval_seconds"] = parts[i + 1]
+                i += 1
+            elif token == "--run-timeout":
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --run-timeout <seconds>[/]")
+                    return True
+                params["run_request_timeout_seconds"] = parts[i + 1]
+                i += 1
+            elif token == "--max":
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /remote-batch <remote_dir> --max <count>[/]")
+                    return True
+                params["max_samples"] = parts[i + 1]
+                i += 1
+            elif token == "--recursive":
+                params["recursive"] = True
+            elif token == "--dynamic":
+                dynamic = True
+            elif token == "--static-only":
+                static_only = True
+            elif token == "--dry-run":
+                params["mode"] = "dry_run"
+            elif token == "--no-wait":
+                params["wait"] = False
+            elif token == "--no-download":
+                params["download"] = False
+            elif token == "--continue-on-failure":
+                params["stop_on_failure"] = False
+            elif token.startswith("-"):
+                self.console.print(f"[yellow]Unknown option:[/] {token}")
+                return True
+            else:
+                positionals.append(token)
+            i += 1
+
+        if samples:
+            if positionals:
+                self.console.print("[yellow]Use either --sample entries or one remote_dir, not both.[/]")
+                return True
+            params["sample_paths"] = samples
+        elif positionals:
+            params["sample_dir"] = positionals[0]
+        else:
+            self.console.print(
+                "[yellow]Usage: /remote-batch <remote_dir> [--pattern *.exe] "
+                "[--dynamic] [--no-wait] or /remote-batch --sample <remote_path>[/]"
+            )
+            return True
+        if len(positionals) > 1:
+            self.console.print("[yellow]Only one remote_dir positional argument is supported.[/]")
+            return True
+
+        if dynamic and not static_only:
+            from .remote.analysis_plans import default_dynamic_config, dynamic_ida_verify_plan
+            params["analysis_plan"] = dynamic_ida_verify_plan()
+            params["dynamic_config"] = default_dynamic_config()
+        else:
+            from .remote.analysis_plans import static_ida_verify_plan
+            params["analysis_plan"] = static_ida_verify_plan()
+
+        prompt = (
+            "Run the Tencent Cloud remote batch workflow with remote_batch_analyze. "
+            "Do not change chatcli's normal polling/tool loop. Use exactly these parameters:\n"
+            f"{params}\n\n"
+            "After the tool finishes, summarize which cases completed, where local results were downloaded, "
+            "and any failed or missing samples. For dynamic analysis, note that execution must remain inside "
+            "the isolated remote analysis server."
+        )
+        self.agent.run(prompt)
+        self._process_auto_requests()
         return True
     def _handle_malware_share(self, a):
         try:
@@ -539,23 +744,85 @@ class REPL(ChildWindowMixin, ReverseCommandMixin, WorkCommandMixin):
         self.console.print(f"[dim]Memory dir: {_memory_dir(self.config.workspace)}[/]")
         return True
 
-    def _handle_dashboard(self):
+    def _handle_dashboard(self, a: str = ""):
         """Show the analysis monitoring dashboard via /dashboard command."""
         remote = self.config.remote if hasattr(self.config, "remote") else None
         if not remote or not remote.enabled:
-            self.console.print("[yellow]Remote server not configured.[/]")
+            self.console.print(
+                "[yellow]Remote server not configured.[/]\n"
+                "[dim]Set CHATCLI_REMOTE_URL and CHATCLI_GUEST_AGENT_TOKEN, or configure "
+                "remote.enabled/base_url/guest_agent_token in config.yaml.[/]"
+            )
+            return True
+        try:
+            parts = shlex.split(a) if a else []
+        except ValueError as e:
+            self.console.print(f"[yellow]Invalid arguments:[/] {e}")
+            return True
+
+        case_id = ""
+        refresh_seconds = 3.0
+        include_probes = True
+        positionals = []
+        i = 0
+        while i < len(parts):
+            token = parts[i]
+            if token in ("--case", "--case-id"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /dashboard [case_id] [--refresh seconds] [--no-probes][/]")
+                    return True
+                case_id = parts[i + 1]
+                i += 1
+            elif token in ("--refresh", "-r"):
+                if i + 1 >= len(parts):
+                    self.console.print("[yellow]Usage: /dashboard [case_id] --refresh <seconds>[/]")
+                    return True
+                try:
+                    refresh_seconds = max(0.5, float(parts[i + 1]))
+                except ValueError:
+                    self.console.print("[yellow]refresh must be a number of seconds[/]")
+                    return True
+                i += 1
+            elif token == "--no-probes":
+                include_probes = False
+            elif token.startswith("-"):
+                self.console.print(f"[yellow]Unknown option:[/] {token}")
+                return True
+            else:
+                positionals.append(token)
+            i += 1
+        if positionals:
+            if case_id:
+                self.console.print("[yellow]Specify case_id only once.[/]")
+                return True
+            case_id = positionals[0]
+        if len(positionals) > 1:
+            self.console.print("[yellow]Usage: /dashboard [case_id] [--refresh seconds] [--no-probes][/]")
             return True
 
         from .ui_dashboard import Dashboard, build_dashboard_callbacks
+        from .tools._remote_client import guest_agent_token, remote_base_url
+        base_url = remote_base_url(remote)
+        token = guest_agent_token(remote)
+        if not base_url:
+            self.console.print("[yellow]Remote base_url or host is not set.[/]")
+            return True
+        if not token:
+            self.console.print("[yellow]Guest Agent token is not set; dashboard cannot read cases/monitor.[/]")
+            return True
 
         remote_fn, child_fn = build_dashboard_callbacks(
-            remote_base_url=remote.base_url,
-            remote_token=remote.guest_agent_token,
+            remote_base_url=base_url,
+            remote_token=token,
             children_dict=getattr(self, "children", {}),
+            case_id=case_id,
+            include_probes=include_probes,
         )
 
-        self.console.print("[cyan]Starting dashboard... Press Ctrl+C to exit.[/]")
-        dash = Dashboard(remote_fn, child_fn, refresh_seconds=3.0)
+        target = f" case_id={case_id}" if case_id else ""
+        probes = "with probes" if include_probes else "without probes"
+        self.console.print(f"[cyan]Starting dashboard{target} ({probes}). Press Ctrl+C to exit.[/]")
+        dash = Dashboard(remote_fn, child_fn, refresh_seconds=refresh_seconds, case_id=case_id)
         dash.run()
         self.console.print("[dim]Dashboard closed.[/]")
         return True

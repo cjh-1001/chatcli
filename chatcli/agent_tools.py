@@ -35,7 +35,13 @@ class AgentToolMixin(AgentToolDisplayMixin):
         # Inject config defaults for certain tools
         if name == "web_search" and "backend" not in params:
             params["backend"] = self.config.search_backend
-        if name in ("ida_analyze", "ida_focus_decompile", "ida_deobfuscate"):
+        if name in (
+            "ida_analyze",
+            "ida_focus_decompile",
+            "ida_deobfuscate",
+            "remote_guest",
+            "remote_batch_analyze",
+        ):
             params["_progress_callback"] = lambda message: self._safe_print(
                 f"    [dim]{message}[/]"
             )
